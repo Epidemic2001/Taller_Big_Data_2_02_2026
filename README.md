@@ -1,6 +1,3 @@
-Aquí tienes una propuesta resumida y estructurada en formato Markdown, ideal para copiar y pegar directamente en el archivo `README.md` de tu repositorio en GitHub:
-
----
 
 # Arquitectura de Datos Sismológicos
 
