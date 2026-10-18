@@ -10,7 +10,7 @@ Este proyecto implementa un *pipeline* de Big Data para la ingesta, procesamient
 | **EMSC** (Europa/Global) | Alertas tempranas en tiempo real (EEW). | Conexión asíncrona persistente (*streaming* puro).<br>**Formato:** JSON sobre WebSocket | Python (`websockets`) + Apache Kafka |
 | **CSN** (Chile) | Datos crudos para *Deep Learning* (acelerómetros y GNSS). | Protocolo SeedLink para consumir flujos de trazas físicas.<br>**Formato:** `miniSEED` (binario) | ObsPy (Python) + Apache Kafka |
 | **EMSC LastQuake** | Cruce de métricas con reportes de sismología ciudadana (*felt reports*). | API REST consultada por ID de evento para obtener testimonios ciudadanos de daños físicos. | Python (`requests`) |
-| **Boostr API** (Chile) | Interfaz para dashboards web y métricas ligeras. | Endpoint JSON empaquetado con tiempos de respuesta de milisegundos.<br>**Formato:** JSON | Python / JavaScript (frontend) |
+| **USGS** (Shakemap) | M | Endpoint JSON empaquetado con tiempos de respuesta de milisegundos.<br>**Formato:** JSON | Python / JavaScript (frontend) |
 
 ## ⚙️ Flujo general
 
