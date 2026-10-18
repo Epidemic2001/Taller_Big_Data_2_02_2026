@@ -8,8 +8,8 @@ Este proyecto implementa un *pipeline* de Big Data para la ingesta, procesamient
 | --- | --- | --- | --- |
 | **USGS** (EE.UU.) | Data Lake histórico y entrenamiento de modelos. | API REST (FDSN) con consultas particionadas por fecha para no superar el límite de 20.000 resultados por consulta.<br>**Formato:** GeoJSON | Python (`requests`) + Apache Airflow |
 | **EMSC** (Europa/Global) | Alertas tempranas en tiempo real (EEW). | Conexión asíncrona persistente (*streaming* puro).<br>**Formato:** JSON sobre WebSocket | Python (`websockets`) + Apache Kafka |
-| **CSN** (Chile) | Datos crudos para *Deep Learning* (acelerómetros y GNSS). | Protocolo SeedLink para consumir flujos de trazas físicas.<br>**Formato:** `miniSEED` (binario) | ObsPy (Python) + Apache Kafka |
-| **EMSC LastQuake** | Cruce de métricas con reportes de sismología ciudadana (*felt reports*). | API REST consultada por ID de evento para obtener testimonios ciudadanos de daños físicos. | Python (`requests`) |
+| **CSN** (Chile) | Datos crudos para *Deep Learning* (acelerómetros y GNSS). | Protocolo SeedLink para consumir flujos de trazas físicas.<br>**Formato:** `miniSEED` (binario) | ObsPy (Python) + Apache NiFi |
+| **EMSC LastQuake** | Cruce de métricas con reportes de sismología ciudadana (*felt reports*). | API REST consultada por ID de evento para obtener testimonios ciudadanos de daños físicos. | Python (`requests`) + Spark |
 | **USGS** (Shakemap) | Mapa de datos de sismos calibrada en la zona de Calama | Formato de Raster, representando una cuadricula de celdas en Bits de informacion visual oespacial | Python/ AWS Lamda + GDAL|
 
 ## ⚙️ Flujo general
