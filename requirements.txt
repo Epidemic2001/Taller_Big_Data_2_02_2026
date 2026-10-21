@@ -1,0 +1,14 @@
+# Extracción (ejecutar_todo.py)
+obspy>=1.4          # miniSEED, QuakeML, StationXML, clientes FDSN
+pandas>=2.0
+pyarrow>=14         # escritura de Parquet
+requests>=2.31
+websocket-client>=1.6
+rasterio>=1.3       # GDAL desde Python (grillas raster del ShakeMap)
+
+# Clientes de las herramientas que corren en Docker (docker-compose.yml)
+kafka-python>=2.0.3 # productor/consumidor contra el broker Kafka
+boto3>=1.34         # despliegue e invocación de Lambda/S3 en LocalStack
+
+# Opcional: Spark fuera de Docker (en Docker ya viene incluido)
+# pyspark==3.5.3    # requiere Java 17
