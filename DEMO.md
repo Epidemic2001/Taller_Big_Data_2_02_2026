@@ -5,7 +5,7 @@ Todo se ejecuta desde la carpeta del proyecto, en la terminal Bash de VS Code y 
 ```bash
 cd ~/universidad/big-data-sismologia
 source .venv/Scripts/activate
-pip install -r requirements.txt        # una vez (agrega kafka-python y boto3)
+pip install -r requirements.txt        # una vez (agrega kafka-python, boto3 y pymongo)
 ```
 
 **Requisito:** Docker Desktop abierto. Levanten **una herramienta a la vez**, porque juntas usan
@@ -136,6 +136,55 @@ porque LocalStack descarga el runtime de Python.
 Si LocalStack no arranca o pide un *auth token*: creen una cuenta gratuita en localstack.cloud,
 copien su token y creen un archivo `.env` en la carpeta del proyecto con
 `LOCALSTACK_AUTH_TOKEN=su_token`.
+
+---
+
+# Fase de almacenamiento
+
+## 6. MongoDB: almacenamiento NoSQL de las alertas EMSC (Kafka → MongoDB)
+
+El perfil `kafka` también levanta **MongoDB** y **Mongo Express**. Con el productor de la sección 1
+corriendo, en otra terminal:
+
+```bash
+python fuentes/emsc_streaming/consumidor_mongodb.py --kafka localhost:9092 --continuo
+```
+
+Sin `--continuo` procesa lo pendiente del tópico y termina. Sin `--kafka` carga los `.jsonl` de la
+capa cruda: sirve para recuperar ingestas anteriores, porque el tópico de Kafka se borra con `down`.
+
+**Qué mostrar:**
+1. Cada sismo que imprime el productor aparece segundos después en la terminal del consumidor
+   (`MongoDB <- create ...`).
+2. Mongo Express (http://localhost:8082, admin / sismologia) → base `sismologia`:
+   - `emsc_eventos`: **un documento por sismo** con su versión más reciente (`_id` = `unid`).
+   - `emsc_revisiones`: el **historial**: el `create` y cada `update` de EMSC, con el JSON original
+     en `mensaje_original`.
+3. Por qué NoSQL: el documento guarda el JSON tal como llega y cada corrección de magnitud se agrega
+   sin cambiar ningún esquema. Un `update` atrasado nunca pisa una versión más nueva.
+4. Índices: compuesto `(unid, ultima_actualizacion_utc desc)` y geoespacial `2dsphere` sobre
+   `epicentro` (GeoJSON).
+5. Consultas en vivo con `mongosh` dentro del contenedor:
+
+```bash
+docker exec -it sismo-mongodb mongosh -u admin -p sismologia --authenticationDatabase admin --quiet sismologia
+```
+
+```js
+db.emsc_eventos.countDocuments()
+// los 5 sismos más recientes
+db.emsc_eventos.find({}, {magnitud: 1, region: 1, tiempo_utc: 1}).sort({tiempo_utc: -1}).limit(5)
+// sismos a menos de 500 km de Santiago (usa el índice 2dsphere)
+db.emsc_eventos.find({epicentro: {$nearSphere: {$geometry: {type: "Point", coordinates: [-70.65, -33.45]},
+                                                $maxDistance: 500000}}}, {magnitud: 1, region: 1})
+// historial de revisiones de un sismo (cambien el unid por uno de su base)
+db.emsc_revisiones.find({unid: "20261021_0000333"}, {accion: 1, magnitud: 1, ultima_actualizacion_utc: 1})
+                  .sort({ultima_actualizacion_utc: -1})
+```
+
+Los datos quedan en el volumen de Docker `mongo-datos` y **sobreviven a
+`docker compose --profile kafka down`**; solo `down -v` los borra. Para consultar lo guardado sin
+prender Kafka: `docker compose --profile mongo up -d`.
 
 ---
 

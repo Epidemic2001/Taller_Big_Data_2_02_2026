@@ -2,6 +2,8 @@
 #
 # Cada herramienta tiene su perfil, para levantarlas de a una (juntas usan ~7 GB de RAM):
 #   docker compose --profile kafka   up -d     -> Kafka + Kafka UI      http://localhost:8081
+#                                                 + MongoDB + Mongo Express  http://localhost:8082
+#   docker compose --profile mongo   up -d     -> solo MongoDB + Mongo Express (consultar lo guardado)
 #   docker compose --profile nifi    up -d     -> Apache NiFi           https://localhost:8443/nifi
 #   docker compose --profile airflow up -d     -> Apache Airflow        http://localhost:8080
 #   docker compose --profile spark   up -d     -> Spark Streaming       http://localhost:4040
@@ -46,6 +48,42 @@ services:
     environment:
       KAFKA_CLUSTERS_0_NAME: sismologia
       KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:19092
+
+  # ------------------------------------------------------------------ MONGODB (almacenamiento EMSC Streaming)
+  # Base NoSQL donde el consumidor de Kafka guarda las alertas EMSC. Está en el perfil "kafka" para
+  # levantarse junto al tópico, y en "mongo" para consultar lo guardado sin prender Kafka.
+  # Los datos viven en el volumen "mongo-datos": sobreviven a "down" y solo se borran con "down -v".
+  mongodb:
+    image: mongo:8.0
+    profiles: ["kafka", "mongo"]
+    container_name: sismo-mongodb
+    ports:
+      - "27017:27017"          # para el consumidor que corre en Windows (localhost:27017)
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: admin
+      MONGO_INITDB_ROOT_PASSWORD: sismologia
+    command: ["--wiredTigerCacheSizeGB", "0.5"]   # por defecto tomaría casi la mitad de la RAM de Docker
+    volumes:
+      - mongo-datos:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  mongo-express:
+    image: mongo-express:1.0.2
+    profiles: ["kafka", "mongo"]
+    container_name: sismo-mongo-express
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    ports:
+      - "8082:8081"
+    environment:
+      ME_CONFIG_MONGODB_URL: mongodb://admin:sismologia@mongodb:27017/
+      ME_CONFIG_BASICAUTH_USERNAME: admin
+      ME_CONFIG_BASICAUTH_PASSWORD: sismologia
 
   # ------------------------------------------------------------------ NIFI (CSN Chile)
   nifi:
@@ -118,3 +156,6 @@ services:
       LAMBDA_RUNTIME_ENVIRONMENT_TIMEOUT: "60"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock   # LocalStack ejecuta cada Lambda en un contenedor
+
+volumes:
+  mongo-datos:
