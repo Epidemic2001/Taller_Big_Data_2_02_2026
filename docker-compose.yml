@@ -12,6 +12,8 @@
 #                                                 + catálogo REST de Apache Iceberg  http://localhost:8181
 #   docker compose --profile lakehouse up -d   -> solo MinIO + catálogo Iceberg (consultar lo guardado)
 #   docker compose --profile spark   up -d     -> Spark Streaming       http://localhost:4040
+#                                                 + ClickHouse (data warehouse)  http://localhost:8123/play
+#   docker compose --profile warehouse up -d   -> solo ClickHouse (consultar lo guardado)
 #   docker compose --profile lambda  up -d     -> AWS Lambda + S3 (LocalStack)  http://localhost:4566
 # Detener:  docker compose --profile <perfil> down
 #
@@ -212,20 +214,55 @@ services:
 
   # ------------------------------------------------------------------ SPARK (EMSC LastQuake)
   spark:
-    image: apache/spark:3.5.3-scala2.12-java17-python3-ubuntu
+    build: ./herramientas/spark          # imagen oficial + driver JDBC de ClickHouse
     profiles: ["spark"]
     container_name: sismo-spark
     user: root
+    depends_on:
+      clickhouse:
+        condition: service_healthy     # el esquema estrella ya existe cuando Spark empieza a cargar
     ports:
       - "4040:4040"            # Spark UI, pestaña "Structured Streaming"
     environment:
       PYTHONPATH: /opt/sismo
+      CLICKHOUSE_URL: jdbc:clickhouse://clickhouse:8123/sismologia
+      CLICKHOUSE_USER: admin
+      CLICKHOUSE_PASSWORD: sismologia
     volumes:
       - .:/opt/sismo
     working_dir: /opt/sismo
     command: >
       /opt/spark/bin/spark-submit --master local[2] --conf spark.ui.port=4040
       /opt/sismo/fuentes/emsc_lastquake/job_spark.py
+
+  # ------------------------------------------------------------------ DATA WAREHOUSE (almacenamiento EMSC LastQuake)
+  # ClickHouse: base OLAP columnar con el modelo estrella de los testimonios. Al arrancar ejecuta
+  # herramientas/clickhouse/esquema.sql (todo IF NOT EXISTS). Está en el perfil "spark" para recibir
+  # los micro-batches, y en "warehouse" para consultar sin Spark. El puerto 8123 sirve las consultas
+  # HTTP, el JDBC de Spark y un editor SQL web en /play.
+  # Los datos viven en el volumen "clickhouse-datos": solo "down -v" los borra.
+  clickhouse:
+    image: clickhouse/clickhouse-server:26.8
+    profiles: ["spark", "warehouse"]
+    container_name: sismo-clickhouse
+    ports:
+      - "8123:8123"
+    environment:
+      CLICKHOUSE_USER: admin
+      CLICKHOUSE_PASSWORD: sismologia
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+      CLICKHOUSE_ALWAYS_RUN_INITDB_SCRIPTS: "true"   # aplica el esquema también si el volumen ya existe
+    ulimits:
+      nofile: {soft: 262144, hard: 262144}
+    volumes:
+      - clickhouse-datos:/var/lib/clickhouse
+      - ./herramientas/clickhouse/esquema.sql:/docker-entrypoint-initdb.d/esquema.sql:ro
+    healthcheck:
+      test: ["CMD", "clickhouse-client", "--user", "admin", "--password", "sismologia",
+             "--query", "EXISTS TABLE sismologia.fact_felt_reports"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
 
   # ------------------------------------------------------------------ LAMBDA + S3 (USGS ShakeMap)
   # LocalStack emula AWS en tu computador. La versión 4.12 es la última que funciona sin cuenta;
@@ -248,3 +285,4 @@ volumes:
   minio-datos:
   iceberg-catalogo:
   datalake-datos:
+  clickhouse-datos:

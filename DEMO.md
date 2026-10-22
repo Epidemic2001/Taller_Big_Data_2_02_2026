@@ -96,7 +96,7 @@ Abran http://localhost:8080 (admin / sismologia). Pueden pasar 1-2 minutos hasta
 
 Terminal 1 (Spark queda escuchando la carpeta de llegada):
 ```bash
-docker compose --profile spark up -d
+docker compose --profile spark up -d --build   # la primera vez construye la imagen (driver de ClickHouse)
 docker logs -f sismo-spark
 ```
 Terminal 2 (deja testimonios nuevos en la zona de llegada):
@@ -106,8 +106,9 @@ python fuentes/emsc_lastquake/sondeo.py --desde 2026-09-01 --ciclos 1
 
 **Qué mostrar:**
 1. Los CSV originales llegando a `datos/landing/lastquake/` (formato original de LastQuake).
-2. Spark UI (http://localhost:4040) → pestaña **Structured Streaming** → la consulta activa:
-   cada **micro-batch** (cada 1 minuto), cuántas filas entraron y la tasa de procesamiento.
+2. Spark UI (http://localhost:4040) → pestaña **Structured Streaming** → las dos consultas activas,
+   `lastquake_silver` (Parquet) y `lastquake_warehouse` (ClickHouse, sección 9): cada
+   **micro-batch** (cada 1 minuto), cuántas filas entraron y la tasa de procesamiento.
 3. Resultado en `datos/silver/emsc_lastquake_spark/unid=.../`. El `_spark_metadata` y el checkpoint
    (`datos/_estado/spark_lastquake`) garantizan que un archivo **nunca se procese dos veces**.
 4. Ejecuten otro ciclo de sondeo y muestren el siguiente micro-batch en la UI.
@@ -280,6 +281,46 @@ ejecutar `crear_flujo.py` para que incluya el paso 9.
 Los datos viven en el volumen de Docker `datalake-datos` y **sobreviven a
 `docker compose --profile nifi down`**; solo `down -v` los borra (y no toca el lakehouse). Para
 consultar sin prender NiFi: `docker compose --profile datalake up -d`.
+
+---
+
+## 9. Data Warehouse en ClickHouse: testimonios ciudadanos (Spark → ClickHouse)
+
+El perfil `spark` también levanta **ClickHouse** (base OLAP columnar), que al arrancar crea el modelo
+estrella de `herramientas/clickhouse/esquema.sql`. El job de Spark tiene una segunda consulta de
+streaming, `lastquake_warehouse`, que en cada micro-batch limpia los testimonios y los carga en
+ClickHouse por JDBC (`foreachBatch`). No hay que ejecutar nada aparte: basta con la sección 4.
+
+```
+                    dim_evento (sismo: magnitud, profundidad, región)
+                          │
+ dim_ubicacion ── fact_felt_reports ── dim_tiempo
+ (celda 0,1°,      (un testimonio: intensidad,     (hora de Chile: fecha,
+  macrozona)        canal, distancia, minutos)       día, franja)
+```
+
+**Qué mostrar:**
+1. En `docker logs -f sismo-spark`, cada micro-batch imprime
+   `[warehouse] micro-batch N: X testimonios de Y sismos -> ClickHouse (Z descartados por valores atípicos)`.
+   La limpieza descarta intensidades fuera de la escala 1–12 y coordenadas imposibles.
+2. Lo que Spark calcula al cargar: distancia de cada testimonio al epicentro (haversine), minutos entre el
+   sismo y el testimonio, hora local de Chile y un nivel de daño estimado según la escala EMS-98.
+3. Consultas analíticas del diseño, por ejemplo la **atenuación** de la intensidad según la distancia y la
+   magnitud, dónde y cuándo se reporta, y por qué canal:
+   ```bash
+   python fuentes/emsc_lastquake/consultar_warehouse.py
+   ```
+4. Editor SQL web de ClickHouse: http://localhost:8123/play (usuario admin, clave sismologia). La vista
+   `sismologia.v_testimonios` ya une el modelo estrella, por ejemplo:
+   `SELECT macrozona, count(), avg(intensidad_corregida) FROM sismologia.v_testimonios GROUP BY macrozona`
+5. **Idempotencia:** las tablas son `ReplacingMergeTree` con claves deterministas (`report_id` es un hash
+   del testimonio). Si Spark vuelve a enviar un micro-batch, en `fact_felt_reports` aparecen filas
+   repetidas, pero `FINAL` (y la vista) muestra cada testimonio una sola vez, y ClickHouse las fusiona
+   solo en segundo plano (o con `OPTIMIZE TABLE sismologia.fact_felt_reports FINAL`).
+
+Los datos viven en el volumen de Docker `clickhouse-datos` y **sobreviven a
+`docker compose --profile spark down`**; solo `down -v` los borra. Para consultar sin prender Spark:
+`docker compose --profile warehouse up -d`.
 
 ---
 
