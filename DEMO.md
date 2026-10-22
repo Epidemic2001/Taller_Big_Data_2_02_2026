@@ -5,7 +5,7 @@ Todo se ejecuta desde la carpeta del proyecto, en la terminal Bash de VS Code y 
 ```bash
 cd ~/universidad/big-data-sismologia
 source .venv/Scripts/activate
-pip install -r requirements.txt        # una vez (agrega kafka-python, boto3 y pymongo)
+pip install -r requirements.txt        # una vez (agrega kafka-python, boto3, pymongo y pyiceberg)
 ```
 
 **Requisito:** Docker Desktop abierto. Levanten **una herramienta a la vez**, porque juntas usan
@@ -79,7 +79,8 @@ docker compose --profile airflow up -d --build   # la primera vez construye la i
 Abran http://localhost:8080 (admin / sismologia). Pueden pasar 1-2 minutos hasta que aparezca el DAG.
 
 **Qué mostrar:**
-1. El DAG **`usgs_catalogo_chile`** y su grafo: `extraer_quakeml → validar_calidad`.
+1. El DAG **`usgs_catalogo_chile`** y su grafo: `extraer_quakeml → validar_calidad → cargar_lakehouse`
+   (la tercera tarea es la fase de almacenamiento, sección 7).
 2. **Actívenlo** con el interruptor (está pausado). Por `catchup=True`, Airflow crea una
    ejecución **por cada mes desde enero de 2026**: este es el **backfill** del histórico, que
    respeta el límite de 20.000 eventos por consulta de la API.
@@ -185,6 +186,52 @@ db.emsc_revisiones.find({unid: "20261021_0000333"}, {accion: 1, magnitud: 1, ult
 Los datos quedan en el volumen de Docker `mongo-datos` y **sobreviven a
 `docker compose --profile kafka down`**; solo `down -v` los borra. Para consultar lo guardado sin
 prender Kafka: `docker compose --profile mongo up -d`.
+
+---
+
+## 7. Data Lakehouse con Apache Iceberg: catálogo USGS (Airflow → MinIO + Iceberg)
+
+El perfil `airflow` también levanta **MinIO** (almacenamiento de objetos S3) y el **catálogo REST de
+Apache Iceberg**. No hay que ejecutar nada aparte: la tarea `cargar_lakehouse` del DAG almacena cada
+mes después de que pasa el control de calidad.
+
+```bash
+docker compose --profile airflow up -d --build
+```
+
+| Zona | Dónde queda | Qué es |
+|---|---|---|
+| **Bronze** | `s3://lakehouse/bronze/usgs_catalogo/anio=AAAA/mes=MM/eventos.quakeml.xml.gz` | El QuakeML original, comprimido y sin modificar |
+| **Silver** | Tabla Iceberg `silver.usgs_sismos` | Un registro por sismo, esquema tipado, particionada por mes y ordenada por magnitud |
+| **Gold** | Tabla Iceberg `gold.usgs_resumen_mensual` | Indicadores por mes (cantidad, magnitud máx., M≥4, M≥5, superficiales) calculados desde silver |
+
+**Qué mostrar:**
+1. En Airflow, la tarea `cargar_lakehouse` de un mes → *Logs*: sube el bronze, escribe silver y
+   recalcula gold.
+2. Consola de MinIO (http://localhost:9001, admin / sismologia2026) → bucket `lakehouse`:
+   - `bronze/`: los QuakeML comprimidos.
+   - `warehouse/silver/usgs_sismos/data/mes=2026-01/...`: los **Parquet**, uno por partición.
+   - `warehouse/.../metadata/`: los **metadatos de Iceberg** (`metadata.json`, manifiestos `.avro`).
+     Esto es lo que convierte un Data Lake en un *Lakehouse*: transacciones ACID, esquema y versiones
+     sobre archivos abiertos.
+3. Contenido, versiones y Time Travel desde Windows:
+   ```bash
+   python fuentes/usgs_catalogo/consultar_lakehouse.py
+   ```
+   - **Gold:** un resumen por mes, con el `snapshot_silver` desde el que se calculó (linaje).
+   - **Particiones ocultas:** Iceberg particiona por mes de `tiempo_utc` sin una columna extra.
+   - **Historial de snapshots:** cada carga es una versión, con el mes y el `run_id` de Airflow que la
+     creó. Si se vuelve a ejecutar un mes (*Clear* en Airflow) aparece un `delete` + `append` del
+     mismo mes y el total no cambia: la carga es **idempotente**.
+   - **Time Travel:** la tabla leída en su primer snapshot versus la actual. Es la forma de saber con qué
+     corte exacto del catálogo se entrenó un modelo. Para comparar con otra versión:
+     `python fuentes/usgs_catalogo/consultar_lakehouse.py --snapshot <snapshot_id>`
+4. Sin Airflow, con los meses ya extraídos y validados en `datos/`, la misma carga se ejecuta con
+   `python fuentes/usgs_catalogo/lakehouse.py --inicio 2026-01 --fin 2026-09`.
+
+Los datos viven en los volúmenes de Docker `minio-datos` e `iceberg-catalogo` y **sobreviven a
+`docker compose --profile airflow down`**; solo `down -v` los borra. Para consultar sin prender
+Airflow: `docker compose --profile lakehouse up -d`.
 
 ---
 

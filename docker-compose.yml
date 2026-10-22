@@ -6,6 +6,9 @@
 #   docker compose --profile mongo   up -d     -> solo MongoDB + Mongo Express (consultar lo guardado)
 #   docker compose --profile nifi    up -d     -> Apache NiFi           https://localhost:8443/nifi
 #   docker compose --profile airflow up -d     -> Apache Airflow        http://localhost:8080
+#                                                 + MinIO (lakehouse)   http://localhost:9001
+#                                                 + catálogo REST de Apache Iceberg  http://localhost:8181
+#   docker compose --profile lakehouse up -d   -> solo MinIO + catálogo Iceberg (consultar lo guardado)
 #   docker compose --profile spark   up -d     -> Spark Streaming       http://localhost:4040
 #   docker compose --profile lambda  up -d     -> AWS Lambda + S3 (LocalStack)  http://localhost:4566
 # Detener:  docker compose --profile <perfil> down
@@ -115,6 +118,8 @@ services:
       AIRFLOW__CORE__EXECUTOR: SequentialExecutor
       AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "False"
       AIRFLOW__SCHEDULER__DAG_DIR_LIST_INTERVAL: "15"
+      LAKEHOUSE_S3_ENDPOINT: http://minio:9000           # desde Windows son localhost:9000 y :8181
+      LAKEHOUSE_CATALOGO_URI: http://iceberg-rest:8181
     volumes:
       - .:/opt/sismo
     command: >
@@ -123,6 +128,53 @@ services:
                  --lastname Sismologia --role Admin --email equipo@usm.cl || true) &&
                (airflow scheduler &) &&
                exec airflow webserver --port 8080"
+
+  # ------------------------------------------------------------------ DATA LAKEHOUSE (almacenamiento USGS Catálogo)
+  # MinIO guarda los archivos (QuakeML bronze y los Parquet + metadatos de las tablas Iceberg) y el
+  # catálogo REST de Iceberg registra qué tablas existen y cuál es su versión (snapshot) vigente.
+  # Están en el perfil "airflow" para levantarse con el DAG, y en "lakehouse" para consultar sin Airflow.
+  # Los datos viven en los volúmenes "minio-datos" e "iceberg-catalogo": solo "down -v" los borra.
+  # MinIO dejó de publicar sus imágenes oficiales en 2025; pgsty/minio es una compilación comunitaria
+  # del mismo código fuente de MinIO.
+  minio:
+    image: pgsty/minio:RELEASE.2026-08-04T00-00-00Z
+    profiles: ["airflow", "lakehouse"]
+    container_name: sismo-minio
+    ports:
+      - "9000:9000"            # API S3 (la usan PyIceberg y el catálogo)
+      - "9001:9001"            # consola web
+    environment:
+      MINIO_ROOT_USER: admin
+      MINIO_ROOT_PASSWORD: sismologia2026
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio-datos:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  iceberg-rest:
+    image: apache/iceberg-rest-fixture:1.10.1
+    profiles: ["airflow", "lakehouse"]
+    container_name: sismo-iceberg-rest
+    depends_on:
+      minio:
+        condition: service_healthy
+    ports:
+      - "8181:8181"
+    environment:
+      CATALOG_WAREHOUSE: s3://lakehouse/warehouse/
+      CATALOG_IO__IMPL: org.apache.iceberg.aws.s3.S3FileIO
+      CATALOG_S3_ENDPOINT: http://minio:9000
+      CATALOG_S3_PATH__STYLE__ACCESS: "true"
+      CATALOG_URI: jdbc:sqlite:/home/iceberg/catalogo.db   # registro de tablas, persistido en el volumen
+      AWS_ACCESS_KEY_ID: admin
+      AWS_SECRET_ACCESS_KEY: sismologia2026
+      AWS_REGION: us-east-1
+    volumes:
+      - iceberg-catalogo:/home/iceberg
 
   # ------------------------------------------------------------------ SPARK (EMSC LastQuake)
   spark:
@@ -159,3 +211,5 @@ services:
 
 volumes:
   mongo-datos:
+  minio-datos:
+  iceberg-catalogo:

@@ -9,6 +9,7 @@ rasterio>=1.3       # GDAL desde Python (grillas raster del ShakeMap)
 # Clientes de las herramientas que corren en Docker (docker-compose.yml)
 kafka-python>=2.0.3 # productor/consumidor contra el broker Kafka
 pymongo>=4.10       # almacenamiento de las alertas EMSC en MongoDB
+pyiceberg[pyarrow,pyiceberg-core]>=0.10  # Data Lakehouse: tablas Apache Iceberg del catálogo USGS
 boto3>=1.34         # despliegue e invocación de Lambda/S3 en LocalStack
 
 # Opcional: Spark fuera de Docker (en Docker ya viene incluido)
