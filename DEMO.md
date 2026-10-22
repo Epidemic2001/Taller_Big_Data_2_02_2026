@@ -5,7 +5,7 @@ Todo se ejecuta desde la carpeta del proyecto, en la terminal Bash de VS Code y 
 ```bash
 cd ~/universidad/big-data-sismologia
 source .venv/Scripts/activate
-pip install -r requirements.txt        # una vez (agrega kafka-python, boto3, pymongo y pyiceberg)
+pip install -r requirements.txt        # una vez (agrega kafka-python, boto3, pymongo, pyiceberg y zarr)
 ```
 
 **Requisito:** Docker Desktop abierto. Levanten **una herramienta a la vez**, porque juntas usan
@@ -58,7 +58,7 @@ Abran https://localhost:8443/nifi. El navegador avisa que el certificado no es c
 **Qué mostrar:**
 1. El flujo completo en el lienzo: disparo cada 5 min → una estación por FlowFile → ventana de
    tiempo → **GET al servicio FDSN del CSN** → **validación** (HTTP 200 y archivo no vacío) →
-   guardar el miniSEED.
+   guardar el miniSEED en disco y en el **Data Lake de MinIO** (fase de almacenamiento, sección 8).
 2. Seleccionen todo (Ctrl+A) y aprieten **Play**. Las colas se llenan y los contadores avanzan en vivo.
 3. Clic derecho en "8. Guardar miniSEED" → **View data provenance** → abran un evento → pestaña
    *Lineage*: el recorrido completo del archivo. Esto es la **trazabilidad** que pide la pauta.
@@ -232,6 +232,54 @@ docker compose --profile airflow up -d --build
 Los datos viven en los volúmenes de Docker `minio-datos` e `iceberg-catalogo` y **sobreviven a
 `docker compose --profile airflow down`**; solo `down -v` los borra. Para consultar sin prender
 Airflow: `docker compose --profile lakehouse up -d`.
+
+---
+
+## 8. Data Lake en MinIO on-premise: trazas del CSN (NiFi → MinIO)
+
+El perfil `nifi` también levanta un **MinIO propio del data lake** (aparte del MinIO del lakehouse)
+y crea sus dos buckets. El flujo de NiFi escribe cada miniSEED en MinIO con el procesador
+**PutS3Object**, además de la copia local en `datos/raw`.
+
+```bash
+docker compose --profile nifi up -d
+python herramientas/nifi/crear_flujo.py --iniciar
+```
+
+Si el grupo de NiFi ya existía (de la sección 2, antes de esta fase), bórrenlo en NiFi y vuelvan a
+ejecutar `crear_flujo.py` para que incluya el paso 9.
+
+| Zona | Dónde queda | Qué es | Lo escribe |
+|---|---|---|---|
+| **Raw** | bucket `raw`: `csn_chile/red=C1/estacion=.../canal=.../anio=AAAA/dia_juliano=DDD/*.mseed` | El miniSEED binario original, **con versionado** (nunca se pierde una versión) | NiFi |
+| **Curated** | bucket `curated`, misma ruta: `cabeceras.parquet` | Metadatos de cabecera de cada miniSEED (estación, canal, Hz, codificación, inicio/fin) | ObsPy |
+| **Curated** | bucket `curated`, misma ruta: `ventanas.zarr` | Tensor `float32 [ventana, muestra]` en m/s o m/s²: ventanas de 60 s sin vacíos, alineadas al minuto | ObsPy + Zarr |
+
+**Qué mostrar:**
+1. En NiFi, el paso **"9. Data Lake MinIO (zona raw)"**: el mismo FlowFile sale de "7. Nombre del
+   archivo" hacia el disco y hacia MinIO. En *View data provenance* se ve el evento `SEND` a
+   `http://minio-datalake:9000`. Si MinIO no responde, NiFi reintenta 3 veces antes de enviarlo a Control.
+2. Consola del data lake (http://localhost:9003, admin / sismologia2026) → bucket `raw` →
+   la estructura jerárquica `red / estacion / canal / anio / dia_juliano` que pide el diseño, para
+   leer en secuencia todo un canal o un día. En un objeto, *Metadata* muestra `estacion`, `canal`,
+   `inicio-utc`, `fin-utc` y `ingestado-por: nifi`, y *Versions* muestra el versionado.
+3. Curado (el "proceso secundario" del diseño): une los tramos de 5 minutos de cada día, pasa de
+   cuentas a unidades físicas con el StationXML del CSN y corta las ventanas. Solo procesa las
+   particiones con miniSEED nuevos, así que se puede ejecutar cada vez que quieran:
+   ```bash
+   python fuentes/csn_chile/datalake.py
+   ```
+4. Contenido del data lake y lectura de un lote como lo haría un `DataLoader` de PyTorch:
+   ```bash
+   python fuentes/csn_chile/consultar_datalake.py
+   ```
+5. Por qué un Data Lake y no una base de datos: son millones de muestras por canal (100–200 Hz).
+   El objeto guarda el binario sin alterar la señal, y Zarr guarda el tensor en bloques que se
+   descargan solo cuando se necesitan.
+
+Los datos viven en el volumen de Docker `datalake-datos` y **sobreviven a
+`docker compose --profile nifi down`**; solo `down -v` los borra (y no toca el lakehouse). Para
+consultar sin prender NiFi: `docker compose --profile datalake up -d`.
 
 ---
 

@@ -31,3 +31,7 @@ Si se quiere que NiFi haga también la descarga HTTP (sin Python en ese paso):
 3. `UpdateAttribute` filename = `C1.${sta}.${cha}.${t0}.mseed`
 4. `PutFile` → `datos/raw/csn_chile/estacion=${sta}/fecha=${t0:substring(0,10)}/`
 5. `ExecuteStreamCommand` con ObsPy para convertir ese archivo a Parquet
+
+Esta variante es la que crea `herramientas/nifi/crear_flujo.py`, y en la fase de almacenamiento le
+suma un `PutS3Object` que deja cada miniSEED en el Data Lake de MinIO (bucket `raw`, prefijos
+`red=/estacion=/canal=/anio=/dia_juliano=`). La zona curada la arma `fuentes/csn_chile/datalake.py`.

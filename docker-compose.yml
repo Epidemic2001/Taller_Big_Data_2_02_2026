@@ -5,6 +5,8 @@
 #                                                 + MongoDB + Mongo Express  http://localhost:8082
 #   docker compose --profile mongo   up -d     -> solo MongoDB + Mongo Express (consultar lo guardado)
 #   docker compose --profile nifi    up -d     -> Apache NiFi           https://localhost:8443/nifi
+#                                                 + MinIO (data lake)   http://localhost:9003
+#   docker compose --profile datalake up -d    -> solo el MinIO del data lake (consultar lo guardado)
 #   docker compose --profile airflow up -d     -> Apache Airflow        http://localhost:8080
 #                                                 + MinIO (lakehouse)   http://localhost:9001
 #                                                 + catálogo REST de Apache Iceberg  http://localhost:8181
@@ -15,6 +17,21 @@
 #
 # La carpeta del proyecto se monta en /opt/sismo dentro de los contenedores, así que todo
 # lo que las herramientas escriben aparece en .\datos en Windows.
+
+# Configuración común de los dos MinIO (data lake del CSN y lakehouse del USGS).
+# MinIO dejó de publicar sus imágenes oficiales en 2025; pgsty/minio es una compilación comunitaria
+# del mismo código fuente de MinIO.
+x-minio: &minio
+  image: pgsty/minio:RELEASE.2026-08-04T00-00-00Z
+  environment:
+    MINIO_ROOT_USER: admin
+    MINIO_ROOT_PASSWORD: sismologia2026
+  command: server /data --console-address ":9001"
+  healthcheck:
+    test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+    interval: 5s
+    timeout: 5s
+    retries: 10
 
 services:
 
@@ -104,6 +121,34 @@ services:
     volumes:
       - ./datos:/opt/sismo/datos
 
+  # ------------------------------------------------------------------ DATA LAKE (almacenamiento CSN Chile)
+  # MinIO on-premise propio del data lake: NiFi deja aquí cada miniSEED (bucket "raw") y el curado
+  # con ObsPy escribe los tensores Zarr para Deep Learning (bucket "curated"). Es una instancia aparte
+  # del MinIO del lakehouse para que cada perfil se levante y se borre (down -v) por separado.
+  minio-datalake:
+    <<: *minio
+    profiles: ["nifi", "datalake"]
+    container_name: sismo-minio-datalake
+    ports:
+      - "9002:9000"            # API S3 (desde Windows: localhost:9002; desde NiFi: minio-datalake:9000)
+      - "9003:9001"            # consola web
+    volumes:
+      - datalake-datos:/data
+
+  # Crea los buckets al levantar el perfil y termina. "raw" tiene versionado: si un miniSEED se vuelve
+  # a escribir, la versión anterior se conserva (zona cruda inmutable).
+  datalake-buckets:
+    image: pgsty/minio:RELEASE.2026-08-04T00-00-00Z
+    profiles: ["nifi", "datalake"]
+    container_name: sismo-datalake-buckets
+    depends_on:
+      minio-datalake:
+        condition: service_healthy
+    entrypoint: >
+      sh -c "mc alias set dl http://minio-datalake:9000 admin sismologia2026 &&
+             mc mb --ignore-existing --with-versioning dl/raw &&
+             mc mb --ignore-existing dl/curated"
+
   # ------------------------------------------------------------------ AIRFLOW (USGS Catálogo)
   airflow:
     build: ./herramientas/airflow
@@ -134,26 +179,15 @@ services:
   # catálogo REST de Iceberg registra qué tablas existen y cuál es su versión (snapshot) vigente.
   # Están en el perfil "airflow" para levantarse con el DAG, y en "lakehouse" para consultar sin Airflow.
   # Los datos viven en los volúmenes "minio-datos" e "iceberg-catalogo": solo "down -v" los borra.
-  # MinIO dejó de publicar sus imágenes oficiales en 2025; pgsty/minio es una compilación comunitaria
-  # del mismo código fuente de MinIO.
   minio:
-    image: pgsty/minio:RELEASE.2026-08-04T00-00-00Z
+    <<: *minio
     profiles: ["airflow", "lakehouse"]
     container_name: sismo-minio
     ports:
       - "9000:9000"            # API S3 (la usan PyIceberg y el catálogo)
       - "9001:9001"            # consola web
-    environment:
-      MINIO_ROOT_USER: admin
-      MINIO_ROOT_PASSWORD: sismologia2026
-    command: server /data --console-address ":9001"
     volumes:
       - minio-datos:/data
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
 
   iceberg-rest:
     image: apache/iceberg-rest-fixture:1.10.1
@@ -213,3 +247,4 @@ volumes:
   mongo-datos:
   minio-datos:
   iceberg-catalogo:
+  datalake-datos:

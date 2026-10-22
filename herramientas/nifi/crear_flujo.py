@@ -11,9 +11,12 @@ Flujo creado dentro del grupo "Ingesta CSN Chile - miniSEED":
     -> UpdateAttribute (ventana de tiempo t0 / t1, 10 a 5 minutos atrás)
     -> InvokeHTTP (GET al servicio FDSN dataselect del CSN)
     -> RouteOnAttribute (validación: HTTP 200 y archivo no vacío)
-         con_datos -> UpdateAttribute (nombre del archivo) -> PutFile (datos/raw/csn_chile/nifi/...)
+         con_datos -> UpdateAttribute (nombre del archivo, año y día juliano)
+                        -> PutFile (copia local en datos/raw/csn_chile/nifi/...)
+                        -> PutS3Object (Data Lake: bucket "raw" del MinIO del data lake,
+                           red=/estacion=/canal=/anio=/dia_juliano=/archivo.mseed)
          sin datos -> LogAttribute (control: queda registrado)
-    errores HTTP y de escritura -> LogAttribute
+    errores HTTP y de escritura -> LogAttribute (PutS3Object reintenta 3 veces antes)
 
 El flujo queda detenido: en la demo se inicia con el botón Play del grupo.
 """
@@ -33,7 +36,11 @@ USUARIO, CLAVE = "admin", "sismologia2026"
 ESTACIONES = ["BO01:HHZ", "BO02:HHZ", "VA05:HNZ", "B05O:HNZ", "AC01:HHZ", "AP01:HHZ"]
 FDSN = "https://owl.csn.uchile.cl/fdsn95/dataselect/1/query"
 FMT = "format(\"yyyy-MM-dd'T'HH:mm:ss\", \"GMT\")"
+FECHA_T0 = "${t0:toDate(\"yyyy-MM-dd'T'HH:mm:ss\", \"GMT\")"
 ALIAS = {"HTTP URL": "Remote URL", "Socket Read Timeout": "Read Timeout"}
+DATALAKE_S3 = "http://minio-datalake:9000"   # el MinIO del data lake visto desde el contenedor de NiFi
+MINIO_USUARIO, MINIO_CLAVE = "admin", "sismologia2026"
+AWS = "org.apache.nifi.processors.aws."
 
 S = requests.Session()
 S.verify = False
@@ -61,31 +68,48 @@ def conectar():
     sys.exit("NiFi no respondió en https://localhost:8443. ¿Está levantado el contenedor?")
 
 
-def crear_procesador(grupo: str, tipo: str, nombre: str, x: int, y: int,
-                     propiedades: dict | None = None, auto_terminar: list | None = None,
-                     programacion: str | None = None) -> str:
-    cuerpo = {"revision": {"version": 0},
-              "component": {"type": tipo, "name": nombre, "position": {"x": x, "y": y}}}
-    p = api("POST", f"/process-groups/{grupo}/processors", json=cuerpo)
-    pid = p["id"]
+def nombres_internos(descriptores: dict, propiedades: dict | None) -> dict:
     # Los nombres internos de las propiedades cambian entre versiones de NiFi: se buscan por
     # nombre visible y, si la propiedad no existe, se envía como propiedad dinámica.
-    descriptores = p["component"]["config"]["descriptors"]
     por_nombre_visible = {d["displayName"]: d["name"] for d in descriptores.values()}
     por_nombre_visible.update({nombre: nombre for nombre in descriptores})
     for nuevo, antiguo in ALIAS.items():  # nombres de NiFi 1.x
         if nuevo not in por_nombre_visible and antiguo in por_nombre_visible:
             por_nombre_visible[nuevo] = por_nombre_visible[antiguo]
-    props = {por_nombre_visible.get(k, k): v for k, v in (propiedades or {}).items()}
-    config = {"properties": props}
+    return {por_nombre_visible.get(k, k): v for k, v in (propiedades or {}).items()}
+
+
+def crear_procesador(grupo: str, tipo: str, nombre: str, x: int, y: int,
+                     propiedades: dict | None = None, auto_terminar: list | None = None,
+                     programacion: str | None = None, reintentos: dict | None = None) -> str:
+    cuerpo = {"revision": {"version": 0},
+              "component": {"type": tipo, "name": nombre, "position": {"x": x, "y": y}}}
+    p = api("POST", f"/process-groups/{grupo}/processors", json=cuerpo)
+    pid = p["id"]
+    config = {"properties": nombres_internos(p["component"]["config"]["descriptors"], propiedades)}
     if auto_terminar:
         config["autoTerminatedRelationships"] = auto_terminar
     if programacion:
         config["schedulingPeriod"] = programacion
+    if reintentos:  # {relación: n}: NiFi reintenta n veces (con espera creciente) antes de enrutarla
+        config.update({"retriedRelationships": list(reintentos), "retryCount": max(reintentos.values()),
+                       "backoffMechanism": "PENALIZE_FLOWFILE", "maxBackoffPeriod": "2 mins"})
     api("PUT", f"/processors/{pid}", json={"revision": p["revision"],
                                             "component": {"id": pid, "config": config}})
     print(f"  + {nombre}")
     return pid
+
+
+def crear_servicio(grupo: str, tipo: str, nombre: str, propiedades: dict) -> str:
+    """Crea y habilita un controller service (p. ej. las credenciales de MinIO para PutS3Object)."""
+    s = api("POST", f"/process-groups/{grupo}/controller-services", json={
+        "revision": {"version": 0}, "component": {"type": tipo, "name": nombre}})
+    sid = s["id"]
+    s = api("PUT", f"/controller-services/{sid}", json={"revision": s["revision"], "component": {
+        "id": sid, "properties": nombres_internos(s["component"]["descriptors"], propiedades)}})
+    api("PUT", f"/controller-services/{sid}/run-status", json={"revision": s["revision"], "state": "ENABLED"})
+    print(f"  + servicio {nombre}")
+    return sid
 
 
 def conectar_procesadores(grupo: str, origen: str, destino: str, relaciones: list[str]):
@@ -134,12 +158,30 @@ def main(iniciar: bool):
     nombre = crear_procesador(grupo, "org.apache.nifi.processors.attributes.UpdateAttribute",
                               "7. Nombre del archivo", 0, 1200,
                               {"filename": "C1.${sta}.${cha}.${t0:replace(':', '')}.mseed",
-                               "fecha": "${t0:substring(0, 10)}"})
+                               "fecha": "${t0:substring(0, 10)}",
+                               "anio": FECHA_T0 + ":format('yyyy', 'GMT')}",
+                               "dia_juliano": FECHA_T0 + ":format('DDD', 'GMT')}"})
     guardar = crear_procesador(grupo, std + "PutFile", "8. Guardar miniSEED (capa bronce)", 0, 1400,
                                {"Directory": "/opt/sismo/datos/raw/csn_chile/nifi/estacion=${sta}/fecha=${fecha}",
                                 "Conflict Resolution Strategy": "replace",
                                 "Create Missing Directories": "true"},
                                auto_terminar=["success"])
+    credenciales = crear_servicio(grupo, AWS + "credentials.provider.service.AWSCredentialsProviderControllerService",
+                                  "Credenciales MinIO (data lake)",
+                                  {"Access Key ID": MINIO_USUARIO, "Secret Access Key": MINIO_CLAVE})
+    # Las propiedades que PutS3Object no conoce (red, estacion, ...) viajan como metadatos del objeto
+    datalake = crear_procesador(grupo, AWS + "s3.PutS3Object", "9. Data Lake MinIO (zona raw)", 600, 1400,
+                                {"Bucket": "raw",
+                                 "Object Key": "csn_chile/red=C1/estacion=${sta}/canal=${cha}/anio=${anio}"
+                                               "/dia_juliano=${dia_juliano}/${filename}",
+                                 "Region": "us-east-1",
+                                 "AWS Credentials Provider Service": credenciales,
+                                 "Endpoint Override URL": DATALAKE_S3,
+                                 "Use Path Style Access": "true",
+                                 "Content Type": "application/vnd.fdsn.mseed",
+                                 "red": "C1", "estacion": "${sta}", "canal": "${cha}",
+                                 "inicio-utc": "${t0}", "fin-utc": "${t1}", "ingestado-por": "nifi"},
+                                auto_terminar=["success"], reintentos={"failure": 3})
     registro = crear_procesador(grupo, std + "LogAttribute", "Control: sin datos o errores", 600, 1000,
                                 {"Log Level": "warn"}, auto_terminar=["success"])
 
@@ -153,7 +195,9 @@ def main(iniciar: bool):
     conectar_procesadores(grupo, validar, nombre, ["con_datos"])
     conectar_procesadores(grupo, validar, registro, ["unmatched"])
     conectar_procesadores(grupo, nombre, guardar, ["success"])
+    conectar_procesadores(grupo, nombre, datalake, ["success"])   # el mismo archivo va a los dos destinos
     conectar_procesadores(grupo, guardar, registro, ["failure"])
+    conectar_procesadores(grupo, datalake, registro, ["failure"])
     print("Conexiones creadas")
 
     invalidos = [p["component"]["name"] + ": " + "; ".join(p["component"].get("validationErrors") or [])
