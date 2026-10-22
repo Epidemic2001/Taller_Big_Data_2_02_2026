@@ -15,6 +15,9 @@
 #                                                 + ClickHouse (data warehouse)  http://localhost:8123/play
 #   docker compose --profile warehouse up -d   -> solo ClickHouse (consultar lo guardado)
 #   docker compose --profile lambda  up -d     -> AWS Lambda + S3 (LocalStack)  http://localhost:4566
+#                                                 + PostgreSQL/PostGIS  localhost:5433
+#                                                 + pgAdmin             http://localhost:5050
+#   docker compose --profile geoespacial up -d -> solo PostGIS + pgAdmin (consultar lo guardado)
 # Detener:  docker compose --profile <perfil> down
 #
 # La carpeta del proyecto se monta en /opt/sismo dentro de los contenedores, así que todo
@@ -277,8 +280,62 @@ services:
       SERVICES: s3,lambda,iam,logs,sts
       LOCALSTACK_AUTH_TOKEN: ${LOCALSTACK_AUTH_TOKEN:-}
       LAMBDA_RUNTIME_ENVIRONMENT_TIMEOUT: "60"
+      LAMBDA_DOCKER_NETWORK: sismologia    # las Lambdas corren en esta red y llegan a "postgis"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock   # LocalStack ejecuta cada Lambda en un contenedor
+
+  # ------------------------------------------------------------------ BASE GEOESPACIAL (almacenamiento USGS ShakeMap)
+  # PostgreSQL + PostGIS (con postgis_raster): la Lambda shakemap-almacenar guarda aquí las teselas
+  # raster del ShakeMap en UTM 19S, los polígonos de intensidad y sus metadatos, ligados por event_id;
+  # el archivo pesado (COG) queda en S3. Al crear la base se ejecuta herramientas/postgis/esquema.sql.
+  # Está en el perfil "lambda" y en "geoespacial" (para consultar sin LocalStack).
+  # En Windows se publica en el puerto 5433 (el 5432 suele estar ocupado por un PostgreSQL local).
+  # Los datos viven en el volumen "postgis-datos": solo "down -v" los borra.
+  postgis:
+    image: postgis/postgis:17-3.6
+    profiles: ["lambda", "geoespacial"]
+    container_name: sismo-postgis
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: sismologia
+      POSTGRES_DB: sismologia
+    volumes:
+      - postgis-datos:/var/lib/postgresql/data
+      - ./herramientas/postgis/esquema.sql:/docker-entrypoint-initdb.d/20_esquema.sql:ro
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "admin", "-d", "sismologia"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # Interfaz web de PostgreSQL/PostGIS, ya conectada a la base: el servidor viene de
+  # herramientas/pgadmin/servers.json y la clave de PostGIS del pgpass (no la pide al abrirla).
+  pgadmin:
+    image: dpage/pgadmin4:9.17
+    profiles: ["lambda", "geoespacial"]
+    container_name: sismo-pgadmin
+    depends_on:
+      postgis:
+        condition: service_healthy
+    ports:
+      - "5050:80"
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@sismologia.cl
+      PGADMIN_DEFAULT_PASSWORD: sismologia
+      PGPASS_FILE: /pgadmin4/pgpass
+      PGADMIN_REPLACE_SERVERS_ON_STARTUP: "True"
+      PGADMIN_CONFIG_UPGRADE_CHECK_ENABLED: "False"
+    volumes:
+      - ./herramientas/pgadmin/servers.json:/pgadmin4/servers.json:ro
+      - ./herramientas/pgadmin/pgpass:/pgadmin4/pgpass:ro
+
+# Nombre fijo de la red, para que LocalStack conecte ahí los contenedores de las Lambdas
+# (si no, el nombre dependería de la carpeta donde cada uno clonó el proyecto).
+networks:
+  default:
+    name: sismologia
 
 volumes:
   mongo-datos:
@@ -286,3 +343,4 @@ volumes:
   iceberg-catalogo:
   datalake-datos:
   clickhouse-datos:
+  postgis-datos:

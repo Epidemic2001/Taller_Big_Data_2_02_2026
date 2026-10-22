@@ -5,7 +5,7 @@ Todo se ejecuta desde la carpeta del proyecto, en la terminal Bash de VS Code y 
 ```bash
 cd ~/universidad/big-data-sismologia
 source .venv/Scripts/activate
-pip install -r requirements.txt        # una vez (agrega kafka-python, boto3, pymongo, pyiceberg y zarr)
+pip install -r requirements.txt        # una vez (agrega kafka-python, boto3, pymongo, pyiceberg, zarr y psycopg)
 ```
 
 **Requisito:** Docker Desktop abierto. Levanten **una herramienta a la vez**, porque juntas usan
@@ -119,12 +119,13 @@ python fuentes/emsc_lastquake/sondeo.py --desde 2026-09-01 --ciclos 1
 
 ```bash
 docker compose --profile lambda up -d
-python herramientas/lambda/desplegar.py      # crea el bucket, las 2 Lambdas y el disparador S3
+python herramientas/lambda/desplegar.py      # crea los buckets, las 3 Lambdas y los disparadores S3
 python herramientas/lambda/invocar.py        # invoca la Lambda por cada sismo M>=6 de 2026
 ```
 
 **Antes de presentar,** ejecuten `invocar.py` una vez: la primera invocación tarda 1-2 minutos
-porque LocalStack descarga el runtime de Python.
+porque LocalStack descarga el runtime de Python. La primera vez, `desplegar.py` también descarga
+GDAL y psycopg para la Lambda de almacenamiento (~1 minuto).
 
 **Qué mostrar:**
 1. `shakemap-descargar` se invoca con el id del sismo, busca su ShakeMap en la API del USGS y sube
@@ -133,7 +134,8 @@ porque LocalStack descarga el runtime de Python.
    ObjectCreated). Eso es la ingesta basada en eventos / serverless.
 3. El control que escribe la validación: grillas presentes, tamaño esperado según el `.hdr`, hash
    SHA-256. Queda en `_control.json` y se copia a `datos/raw/usgs_shakemap/`.
-4. Logs de ambas Lambdas: `docker logs sismo-localstack`.
+4. Logs de las Lambdas: `docker logs sismo-localstack`. La tercera, `shakemap-almacenar`, es la
+   fase de almacenamiento (sección 10).
 
 Si LocalStack no arranca o pide un *auth token*: creen una cuenta gratuita en localstack.cloud,
 copien su token y creen un archivo `.env` en la carpeta del proyecto con
@@ -321,6 +323,64 @@ ClickHouse por JDBC (`foreachBatch`). No hay que ejecutar nada aparte: basta con
 Los datos viven en el volumen de Docker `clickhouse-datos` y **sobreviven a
 `docker compose --profile spark down`**; solo `down -v` los borra. Para consultar sin prender Spark:
 `docker compose --profile warehouse up -d`.
+
+---
+
+## 10. Base relacional geoespacial: ShakeMap (Lambda → PostgreSQL + PostGIS + S3)
+
+El perfil `lambda` también levanta **PostgreSQL + PostGIS** (con `postgis_raster`). La Lambda
+**`shakemap-almacenar`** cierra la cadena de eventos:
+`descargar → (S3: raster.zip) → validar → (S3: _control.json) → almacenar`. Con GDAL reproyecta las
+grillas a **SIRGAS-Chile / UTM 19S (EPSG:5361)**, sube el archivo pesado a S3 y guarda lo
+consultable en PostGIS.
+
+```bash
+docker compose --profile lambda up -d
+python fuentes/usgs_shakemap/infraestructura_calama.py   # una vez: infraestructura crítica de Calama (OpenStreetMap)
+python herramientas/lambda/desplegar.py
+python herramientas/lambda/invocar.py
+```
+
+| Dónde | Qué guarda |
+|---|---|
+| S3 `s3://sismo-silver/usgs_shakemap/evento=.../shakemap_utm19s.tif` | **COG** de 3 bandas (MMI, PGA, PGV), celdas de 1 km: el archivo pesado, para mapas web |
+| PostGIS `eventos` | El sismo, con el epicentro como geometría. `event_id` es el mismo id del USGS del lakehouse |
+| PostGIS `shakemaps` | Metadatos del ShakeMap y la ubicación del COG en S3 (clave foránea `event_id`) |
+| PostGIS `shakemap_teselas` | El raster en teselas de 100 × 100 (columna `RASTER`), con índice **GiST** sobre `ST_ConvexHull(rast)` |
+| PostGIS `shakemap_isosistas` | Un polígono por grado de intensidad MMI (columna `GEOMETRY`), con índice GiST |
+| PostGIS `infraestructura_calama` | Hospitales, clínicas, subestaciones y faenas mineras (© OpenStreetMap, ODbL) |
+
+**Qué mostrar:**
+1. En la salida de `invocar.py`, después del control aparece el resumen de `shakemap-almacenar`
+   (COG en S3, teselas y área por grado MMI). Nadie la invoca: la activa S3 al llegar `_control.json`.
+2. Las consultas espaciales del diseño:
+   ```bash
+   python fuentes/usgs_shakemap/consultar_postgis.py
+   ```
+   - **`ST_Value`:** la intensidad, PGA y PGV que recibió cada hospital, subestación y faena de Calama.
+   - **`ST_Intersects`:** qué instalaciones caen dentro de los polígonos de intensidad MMI ≥ 6.
+   - **`ST_Clip`:** estadística de la MMI dentro de 20 km de la plaza de Calama.
+3. En psql (`docker exec -it sismo-postgis psql -U admin -d sismologia`), la vista
+   `v_exposicion_infraestructura` ya cruza raster e infraestructura:
+   `SELECT tipo, nombre, mmi, pga_g FROM v_exposicion_infraestructura ORDER BY mmi DESC LIMIT 10;`
+4. **pgAdmin** (http://localhost:5050, usuario admin@sismologia.cl, clave sismologia): el servidor
+   "PostGIS ShakeMap" ya está configurado y conecta sin pedir clave. En *Databases → sismologia →
+   Tools → Query Tool* ejecuten, por ejemplo:
+   ```sql
+   SELECT 'MMI ' || mmi AS capa, ST_Transform(geom, 4326) AS geom FROM shakemap_isosistas WHERE event_id = 'us6000t04s'
+   UNION ALL SELECT tipo || ': ' || coalesce(nombre, 's/n'), ST_Transform(geom, 4326) FROM infraestructura_calama
+   ```
+   y en el resultado, el ícono de mapa de la columna `geom` abre el **Geometry Viewer**: los polígonos
+   de intensidad y la infraestructura de Calama sobre un mapa de OpenStreetMap.
+5. Desde Windows la base está en `localhost:5433` (usuario admin, clave sismologia), por ejemplo
+   para abrirla en QGIS o DBeaver. Se usa el 5433 porque el 5432 suele estar ocupado por un
+   PostgreSQL instalado en el computador.
+
+Volver a ejecutar `invocar.py` reemplaza los datos de ese sismo (no los duplica). Los datos de
+PostGIS viven en el volumen `postgis-datos` y **sobreviven a `docker compose --profile lambda down`**;
+para consultar sin LocalStack: `docker compose --profile geoespacial up -d`. LocalStack gratuito **no
+guarda** sus buckets al bajarlo: `invocar.py` copia el COG a `datos/silver/usgs_shakemap/` y basta con
+volver a ejecutarlo para que el COG reaparezca en S3.
 
 ---
 

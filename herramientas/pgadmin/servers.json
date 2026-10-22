@@ -1,0 +1,14 @@
+{
+  "Servers": {
+    "1": {
+      "Name": "PostGIS ShakeMap (sismologia)",
+      "Group": "Sismología",
+      "Host": "postgis",
+      "Port": 5432,
+      "MaintenanceDB": "sismologia",
+      "Username": "admin",
+      "PassFile": "/.pgpass",
+      "SSLMode": "prefer"
+    }
+  }
+}

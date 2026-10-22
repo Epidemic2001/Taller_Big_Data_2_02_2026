@@ -50,10 +50,12 @@ def descargar(event, context=None):
     eid = event["eventid"]
     detalle = json.loads(_get(URL_DETALLE.format(eid)))
     p = detalle["properties"]
+    lon, lat, profundidad = detalle["geometry"]["coordinates"]
     sm = p["products"]["shakemap"][0]
     raster = _get(sm["contents"]["download/raster.zip"]["url"])
     base = f"{PREFIJO}/evento={eid}"
     meta = {"eventid": eid, "magnitud": p.get("mag"), "lugar": p.get("place"),
+            "latitud": lat, "longitud": lon, "profundidad_km": profundidad,
             "tiempo_utc": datetime.fromtimestamp(p["time"] / 1000, timezone.utc).isoformat(),
             "version_shakemap": sm.get("properties", {}).get("version"),
             "bytes_raster": len(raster), "sha256_raster": hashlib.sha256(raster).hexdigest(),

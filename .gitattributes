@@ -1,0 +1,2 @@
+# El pgpass de pgAdmin lo lee un contenedor Linux: siempre con saltos de línea LF, también en Windows
+herramientas/pgadmin/pgpass text eol=lf

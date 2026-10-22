@@ -1,6 +1,7 @@
 """Detecta sismos de Chile con ShakeMap e invoca la Lambda "shakemap-descargar" por cada uno.
-Luego muestra el control que escribió "shakemap-validar" (activada sola por S3) y copia
-los archivos del bucket a datos/raw/usgs_shakemap/ para tenerlos también en el computador.
+Luego muestra el control que escribió "shakemap-validar" y el resumen de "shakemap-almacenar"
+(las dos las activa S3 sola, en cadena), y copia los archivos de los buckets a datos/raw y
+datos/silver (usgs_shakemap/) para tenerlos también en el computador.
 
     python herramientas/lambda/invocar.py --desde 2026-01-01 --minmag 6 --max 2
 
@@ -17,8 +18,8 @@ import requests
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from config import CHILE, RAW  # noqa: E402
-from desplegar import BUCKET, cliente  # noqa: E402
+from config import CHILE, RAW, SILVER  # noqa: E402
+from desplegar import BUCKET, BUCKET_SILVER, cliente  # noqa: E402
 
 URL = "https://earthquake.usgs.gov/fdsnws/event/1/query"
 
@@ -28,6 +29,16 @@ def sismos_con_shakemap(desde: str, minmag: float) -> list[str]:
                                   "producttype": "shakemap", "orderby": "magnitude", **CHILE}, timeout=60)
     r.raise_for_status()
     return [f["id"] for f in r.json()["features"]]
+
+
+def esperar_json(s3, bucket: str, clave: str, intentos: int) -> dict | None:
+    """Espera a que una Lambda disparada por S3 deje su archivo de resultado."""
+    for _ in range(intentos):
+        try:
+            return json.loads(s3.get_object(Bucket=bucket, Key=clave)["Body"].read())
+        except s3.exceptions.NoSuchKey:
+            time.sleep(3)
+    return None
 
 
 def main(desde: str, minmag: float, maximo: int):
@@ -42,23 +53,28 @@ def main(desde: str, minmag: float, maximo: int):
         if r.get("FunctionError"):
             print("ERROR:", r["Payload"].read().decode())
             continue
-        clave_control = f"usgs_shakemap/evento={eid}/_control.json"
-        for _ in range(60):  # esperar a que la Lambda validar (disparada por S3) termine
-            try:
-                control = json.loads(s3.get_object(Bucket=BUCKET, Key=clave_control)["Body"].read())
-                break
-            except s3.exceptions.NoSuchKey:
-                time.sleep(3)
-        else:
+        prefijo = f"usgs_shakemap/evento={eid}"
+        control = esperar_json(s3, BUCKET, f"{prefijo}/_control.json", intentos=60)
+        if control is None:
             print("La Lambda validar no escribió el control a tiempo; revisa: docker logs sismo-localstack")
             continue
         print(f"    Control (shakemap-validar): estado={control['estado']} "
               f"grillas={list(control['grillas'])} problemas={control['problemas']}")
-        for obj in s3.list_objects_v2(Bucket=BUCKET, Prefix=f"usgs_shakemap/evento={eid}/").get("Contents", []):
-            destino = RAW / obj["Key"]
-            destino.parent.mkdir(parents=True, exist_ok=True)
-            s3.download_file(BUCKET, obj["Key"], str(destino))
-        print(f"    Copiado a {RAW / 'usgs_shakemap' / f'evento={eid}'}\n")
+        if control["estado"] == "ok":
+            # la primera vez la Lambda almacenar tarda más: descomprime GDAL y psycopg
+            resumen = esperar_json(s3, BUCKET_SILVER, f"{prefijo}/almacenado.json", intentos=100)
+            if resumen is None:
+                print("    La Lambda almacenar no terminó a tiempo; revisa: docker logs sismo-localstack")
+            else:
+                print(f"    Almacenado (shakemap-almacenar): COG {resumen['cog']} ({resumen['cog_bytes'] / 1e6:.1f} MB)"
+                      f" | PostGIS: {resumen['teselas']} teselas, área por grado MMI (km²) "
+                      f"{resumen['area_km2_por_mmi']}")
+        for bucket, capa in ((BUCKET, RAW), (BUCKET_SILVER, SILVER)):
+            for obj in s3.list_objects_v2(Bucket=bucket, Prefix=f"{prefijo}/").get("Contents", []):
+                destino = capa / obj["Key"]
+                destino.parent.mkdir(parents=True, exist_ok=True)
+                s3.download_file(bucket, obj["Key"], str(destino))
+        print(f"    Copiado a {RAW / prefijo} y {SILVER / prefijo}\n")
 
 
 if __name__ == "__main__":
