@@ -72,3 +72,25 @@ Para responder a la naturaleza heterogénea de las 5 ingestas (datos estructurad
    * Las alertas tempranas (`JSON`) se indexan en la **Base NoSQL (MongoDB / Cassandra + Redis)** para consumo en vivo.
    * Los reportes ciudadanos procesados por Spark alimentan el esquema estrella en el **Data Warehouse (ClickHouse / BigQuery)**.
    * Los mapas de intensidad de Calama (`Raster`) se indexan espacialmente en la **Base Relacional Geoespacial (PostgreSQL + PostGIS)**.
+
+## 📊 Consumo de datos
+
+Las cinco formas en que se consume el ecosistema. Cada consumo lee directamente de uno de los almacenamientos descritos arriba, sin copiar los datos.
+
+### Cinco formas de consumir nuestro ecosistema
+
+![Tabla con los cinco tipos de consumo: alertamiento con un bot en Python sobre MongoDB, dashboards en Grafana sobre ClickHouse, API REST y mapa web Leaflet sobre PostGIS y S3, Machine Learning con FastAPI y scikit-learn sobre ClickHouse, y exploración ad-hoc en JupyterLab sobre el Lakehouse Iceberg y el Data Lake MinIO](docs/consumo/01_cinco_formas_de_consumo.png)
+
+Son 5 de las 10 formas de consumo que lista la pauta (sección VI), una por tipo de uso: alerta en tiempo real, BI, aplicación con API, modelo de ML y exploración ad-hoc. Entre todas leen los 5 almacenamientos del ecosistema: MongoDB, ClickHouse, PostGIS + S3, el Lakehouse Iceberg y el Data Lake de MinIO. El dashboard y el modelo de ML comparten ClickHouse porque ahí están los testimonios con distancia y magnitud.
+
+### Cómo se materializa: de la fuente al usuario
+
+![Diagrama de flujo de cada fuente a su ingesta, su almacenamiento y su consumo: EMSC Streaming a Kafka, MongoDB y alertas; USGS Catálogo a Airflow, Iceberg y JupyterLab; CSN Chile a NiFi, MinIO y JupyterLab; EMSC LastQuake a Spark Streaming, ClickHouse, Grafana y el endpoint de ML; USGS ShakeMap a AWS Lambda, PostGIS + S3 y la API REST con mapa web](docs/consumo/02_de_la_fuente_al_usuario.png)
+
+Cada fila es una fuente con su herramienta de ingesta y su almacenamiento, y el color indica qué consumo lee ese almacenamiento. USGS Catálogo y CSN Chile comparten JupyterLab; los testimonios de ClickHouse alimentan tanto el dashboard como el modelo de ML. Los servicios de consumo se conectan directamente a los almacenamientos que ya levanta Docker Compose.
+
+### Un sismo, cinco consumos
+
+![Línea de tiempo de los cinco consumos según la velocidad del dato: tiempo real (alertas), casi real (Grafana), por evento (API REST y mapa web), bajo demanda (endpoint de ML) e histórico (notebooks en JupyterLab), con las preguntas que responde cada uno y el almacenamiento que lee](docs/consumo/03_un_sismo_cinco_consumos.png)
+
+El consumo sigue el tipo de ingesta: lo que llega por *streaming* se consume como alerta en segundos; los testimonios por *micro-batch* alimentan el dashboard; el ShakeMap por evento alimenta la API y el mapa; el modelo de ML responde bajo demanda; y el histórico por *batch* y los archivos del CSN se exploran en notebooks. Así, cada almacenamiento tiene un consumo coherente con su dato.
