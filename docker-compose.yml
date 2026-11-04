@@ -18,6 +18,9 @@
 #                                                 + PostgreSQL/PostGIS  localhost:5433
 #                                                 + pgAdmin             http://localhost:5050
 #   docker compose --profile geoespacial up -d -> solo PostGIS + pgAdmin (consultar lo guardado)
+#   docker compose --profile mapa    up -d     -> consumo 3: API REST + mapa web  http://localhost:8090
+#                                                 + PostgreSQL/PostGIS  localhost:5433
+#   docker compose --profile consumo up -d     -> los servicios de consumo con sus almacenamientos
 # Detener:  docker compose --profile <perfil> down
 #
 # La carpeta del proyecto se monta en /opt/sismo dentro de los contenedores, así que todo
@@ -293,7 +296,7 @@ services:
   # Los datos viven en el volumen "postgis-datos": solo "down -v" los borra.
   postgis:
     image: postgis/postgis:17-3.6
-    profiles: ["lambda", "geoespacial"]
+    profiles: ["lambda", "geoespacial", "mapa", "consumo"]
     container_name: sismo-postgis
     ports:
       - "5433:5432"
@@ -330,6 +333,26 @@ services:
     volumes:
       - ./herramientas/pgadmin/servers.json:/pgadmin4/servers.json:ro
       - ./herramientas/pgadmin/pgpass:/pgadmin4/pgpass:ro
+
+  # ------------------------------------------------------------------ CONSUMO 3: API REST + MAPA WEB (PostGIS + S3)
+  # FastAPI lee directo de PostGIS (y el COG de S3): daño por sector e instalación crítica de Calama,
+  # isosistas y rutas de emergencia que evitan las calles de mayor intensidad. Sirve también el mapa
+  # web (Leaflet). Antes, una vez: python consumo/api_mapa/cargar_calama.py (red vial y sectores de OSM).
+  # Si LocalStack no está levantado, el COG se lee de la copia que invocar.py deja en datos/silver.
+  api-mapa:
+    build: ./consumo/api_mapa
+    profiles: ["mapa", "consumo"]
+    container_name: sismo-api-mapa
+    depends_on:
+      postgis:
+        condition: service_healthy
+    ports:
+      - "8090:8090"            # mapa en http://localhost:8090, documentación de la API en /docs
+    environment:
+      POSTGIS_URL: postgresql://admin:sismologia@postgis:5432/sismologia
+      S3_ENDPOINT: http://localstack:4566
+    volumes:
+      - .:/opt/sismo
 
 # Nombre fijo de la red, para que LocalStack conecte ahí los contenedores de las Lambdas
 # (si no, el nombre dependería de la carpeta donde cada uno clonó el proyecto).

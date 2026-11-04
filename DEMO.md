@@ -384,6 +384,61 @@ volver a ejecutarlo para que el COG reaparezca en S3.
 
 ---
 
+## 11. Consumo: API REST + mapa web, daños y rutas de emergencia (PostGIS + S3)
+
+Aplicación web (FastAPI + Leaflet) que **lee directo de la base geoespacial del ShakeMap**, sin copiar
+datos: qué daño potencial recibió cada sector de Calama y cada hospital, subestación o faena, y las
+**rutas de emergencia que evitan las calles de mayor intensidad**. El código está en `consumo/api_mapa/`.
+
+```bash
+docker compose --profile lambda --profile mapa up -d --build   # PostGIS + LocalStack + la API
+python fuentes/usgs_shakemap/infraestructura_calama.py         # una vez (si no se hizo en la demo 10)
+python consumo/api_mapa/cargar_calama.py                       # una vez: red vial y sectores (OpenStreetMap)
+python herramientas/lambda/desplegar.py                        # si LocalStack se reinició
+python herramientas/lambda/invocar.py --evento <id_usgs>       # ShakeMap de un sismo que afecte a Calama
+```
+
+Para la demo conviene un sismo **cercano a Calama**: los de mayor magnitud de 2026 pueden quedar
+lejos y su ShakeMap no cubrir la ciudad. Esta consulta al USGS lista los sismos M ≥ 6,5 con ShakeMap a
+menos de 300 km de Calama (el `id` de cada uno se pasa a `--evento`):
+<https://earthquake.usgs.gov/fdsnws/event/1/query?format=geojson&latitude=-22.456&longitude=-68.929&maxradiuskm=300&minmagnitude=6.5&producttype=shakemap&orderby=magnitude>
+
+| Dónde | Qué guarda |
+|---|---|
+| PostGIS `red_vial_calama` | Calles y caminos de OSM cortados en tramos entre cruces: el grafo de las rutas. Cada tramo tiene tipo de vía y velocidad de referencia |
+| PostGIS `sectores_calama` | Ciudades, pueblos, villas y poblaciones de OSM, cada una con su polígono de Voronoi (la zona más cercana a ella) acotado por un radio |
+| `datos/raw/osm_calama/` | Respuesta original de Overpass. `cargar_calama.py --sin-descargar` vuelve a cargar desde ahí, sin internet |
+
+**Qué mostrar:**
+1. **Mapa** en http://localhost:8090: al elegir un sismo, cada sector se pinta según la intensidad
+   máxima que recibió, con la escala de Mercalli y los colores del ShakeMap del USGS. El panel resume
+   cuántos sectores, instalaciones y km de calles quedaron en cada nivel de daño potencial. Al hacer
+   clic en un hospital se ven su MMI, PGA y PGV.
+2. **Ruta segura vs. ruta directa:** botones *Origen* y *Destino*, y dos clics en el mapa. La ruta
+   directa (gris, punteada) es la más rápida sin considerar el sismo. La segura (azul) castiga cada
+   calle según su intensidad y **no pasa por las calles bloqueadas** (rojas), que son las que superan
+   el umbral elegido con el deslizador. La tabla compara distancia, tiempo y exposición de ambas.
+3. **Hospital más cercano:** con solo el origen marcado, calcula la ruta segura al hospital o clínica
+   **operativo** más cercano. Descarta los que recibieron una intensidad sobre el umbral (posible daño).
+4. **La API REST** en http://localhost:8090/docs (Swagger): por ejemplo, *GET
+   /api/eventos/{event_id}/ruta* con `desde=-22.456,-68.929`. Una app móvil o Google Maps consumirían
+   este mismo GeoJSON.
+5. **Lee de S3:** el enlace *Descargar ShakeMap (COG)* baja el GeoTIFF de 3 bandas desde
+   `s3://sismo-silver/...`. Si LocalStack está apagado, usa la copia que `invocar.py` dejó en `datos/silver`.
+
+**Cómo se calcula la ruta segura:** la red vial es un grafo (nodos = cruces, aristas = tramos). Para el
+sismo elegido, la API obtiene la MMI de cada tramo con `ST_Value` sobre el raster del ShakeMap, en el
+centro de los tramos cortos y cada 500 m en los largos. Luego aplica Dijkstra (networkx) con un costo
+igual al tiempo de viaje × (1 + (MMI − 4)²). Por ejemplo, un tramo con MMI VI cuesta 5 veces su tiempo,
+y uno con MMI VII, 10 veces. Los tramos sobre el umbral cuestan 1000 veces más: solo se usan si no hay
+otra forma de llegar (por ejemplo, para salir de la zona cuando el origen está dentro), y entonces la
+API lo avisa. Las rutas se piensan para vehículos de emergencia, así que no consideran el sentido de
+tránsito.
+
+Para correr la API sin Docker (con PostGIS levantado): `python consumo/api_mapa/app.py`.
+
+---
+
 ## Recomendaciones para la presentación
 
 - **Graben un video de cada demo** antes del día, como respaldo si falla internet o Docker.

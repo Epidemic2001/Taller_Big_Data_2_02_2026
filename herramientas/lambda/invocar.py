@@ -4,6 +4,7 @@ Luego muestra el control que escribió "shakemap-validar" y el resumen de "shake
 datos/silver (usgs_shakemap/) para tenerlos también en el computador.
 
     python herramientas/lambda/invocar.py --desde 2026-01-01 --minmag 6 --max 2
+    python herramientas/lambda/invocar.py --evento <id_usgs> [<id_usgs> ...]   # sismos específicos
 
 La primera invocación tarda 1-2 minutos: LocalStack descarga la imagen del runtime de Python.
 """
@@ -41,10 +42,14 @@ def esperar_json(s3, bucket: str, clave: str, intentos: int) -> dict | None:
     return None
 
 
-def main(desde: str, minmag: float, maximo: int):
+def main(desde: str, minmag: float, maximo: int, eventos: list[str] | None = None):
     lam, s3 = cliente("lambda"), cliente("s3")
-    ids = sismos_con_shakemap(desde, minmag)[:maximo]
-    print(f"Sismos con ShakeMap en Chile desde {desde} (M>={minmag}): {ids}\n")
+    if eventos:
+        ids = eventos
+        print(f"Sismos pedidos: {ids}\n")
+    else:
+        ids = sismos_con_shakemap(desde, minmag)[:maximo]
+        print(f"Sismos con ShakeMap en Chile desde {desde} (M>={minmag}): {ids}\n")
     for eid in ids:
         print(f"--> Invocando Lambda shakemap-descargar para {eid} ...")
         r = lam.invoke(FunctionName="shakemap-descargar", Payload=json.dumps({"eventid": eid}),
@@ -82,5 +87,6 @@ if __name__ == "__main__":
     ap.add_argument("--desde", default="2026-01-01")
     ap.add_argument("--minmag", type=float, default=6.0)
     ap.add_argument("--max", type=int, default=2)
+    ap.add_argument("--evento", nargs="+", help="ids USGS de sismos específicos (en vez de buscarlos por fecha)")
     a = ap.parse_args()
-    main(a.desde, a.minmag, a.max)
+    main(a.desde, a.minmag, a.max, a.evento)

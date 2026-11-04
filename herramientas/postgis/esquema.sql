@@ -80,3 +80,33 @@ JOIN shakemap_teselas AS t ON ST_Intersects(t.rast, i.geom)
 JOIN shakemaps AS s ON s.event_id = t.event_id
 JOIN eventos AS e ON e.event_id = s.event_id
 ORDER BY s.event_id, i.osm_id;
+
+-- ---------------------------------------------------------------- Consumo: API REST + mapa web
+-- Las carga consumo/api_mapa/cargar_calama.py desde OpenStreetMap (que también ejecuta este archivo,
+-- así que se crean aunque la base ya existiera).
+
+-- Red vial de Calama cortada en tramos entre intersecciones: es el grafo de las rutas de emergencia.
+-- nodo_a y nodo_b son los id de los nodos OSM de cada extremo (los tramos que comparten un nodo se tocan).
+CREATE TABLE IF NOT EXISTS red_vial_calama (
+    id             bigserial PRIMARY KEY,
+    osm_way_id     bigint NOT NULL,
+    nodo_a         bigint NOT NULL,
+    nodo_b         bigint NOT NULL,
+    tipo           text NOT NULL,        -- etiqueta highway de OSM: primary, residential, track...
+    nombre         text,
+    velocidad_kmh  smallint NOT NULL,
+    longitud_m     real NOT NULL,
+    geom           geometry(LineString, 5361) NOT NULL
+);
+CREATE INDEX IF NOT EXISTS red_vial_calama_gix ON red_vial_calama USING gist (geom);
+
+-- Sectores de Calama: el área de influencia (polígono de Voronoi, acotado por un radio) de cada
+-- ciudad, pueblo, villa o población de OpenStreetMap. Con ellos el mapa dice qué sector sufrió qué daño.
+CREATE TABLE IF NOT EXISTS sectores_calama (
+    osm_id     text PRIMARY KEY,
+    nombre     text NOT NULL,
+    tipo       text NOT NULL,            -- etiqueta place de OSM: town, village, suburb, neighbourhood...
+    poblacion  integer,
+    geom       geometry(MultiPolygon, 5361) NOT NULL
+);
+CREATE INDEX IF NOT EXISTS sectores_calama_gix ON sectores_calama USING gist (geom);

@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sismos en Calama: daños y rutas de emergencia</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+        integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+  <link rel="stylesheet" href="/static/estilo.css">
+</head>
+<body>
+  <aside id="panel">
+    <header>
+      <h1>Sismos en Calama</h1>
+      <p>Daños por sector y rutas de emergencia · ShakeMap del USGS en PostGIS</p>
+    </header>
+
+    <section>
+      <h2>Sismo</h2>
+      <select id="evento" aria-label="Sismo"><option>Cargando…</option></select>
+      <div id="ficha"></div>
+    </section>
+
+    <section>
+      <h2>Impacto en Calama</h2>
+      <div id="resumen"><p class="ayuda">Elige un sismo.</p></div>
+    </section>
+
+    <section>
+      <h2>Rutas de emergencia</h2>
+      <p class="ayuda">Marca un origen y un destino en el mapa. La ruta segura evita las calles de mayor
+        intensidad; la directa es la más rápida sin considerar el sismo.</p>
+      <div class="botones">
+        <button id="btn-origen"><span class="marca">A</span>Origen</button>
+        <button id="btn-destino"><span class="marca">B</span>Destino</button>
+        <button id="btn-hospital" class="principal" disabled>Hospital más cercano</button>
+        <button id="btn-limpiar">Limpiar</button>
+      </div>
+      <div class="umbral">
+        <label for="umbral"><span>Bloquear calles con intensidad ≥</span><strong id="umbral-texto"></strong></label>
+        <input id="umbral" type="range" min="5" max="9" step="0.5" value="7">
+      </div>
+      <div id="resultado-ruta"></div>
+    </section>
+
+    <section>
+      <h2>Capas</h2>
+      <div class="capas">
+        <label><input type="checkbox" id="capa-sectores" checked> Sectores con su daño potencial</label>
+        <label><input type="checkbox" id="capa-infra" checked> Hospitales, subestaciones y faenas</label>
+        <label><input type="checkbox" id="capa-bloqueadas" checked> Calles bloqueadas (MMI sobre el umbral)</label>
+        <label><input type="checkbox" id="capa-calles"> Intensidad por calle (MMI ≥ V)</label>
+        <label><input type="checkbox" id="capa-isosistas"> Isosistas del ShakeMap</label>
+      </div>
+      <div class="leyenda" id="leyenda"></div>
+    </section>
+
+    <footer>
+      <a href="/docs" target="_blank" rel="noopener">API REST (documentación)</a> ·
+      <a id="enlace-cog" href="#">Descargar ShakeMap (COG)</a><br>
+      Intensidad: USGS ShakeMap. Red vial, sectores e infraestructura: © colaboradores de OpenStreetMap (ODbL).
+      Daño potencial según la escala de Mercalli Modificada del USGS.
+    </footer>
+  </aside>
+
+  <main id="mapa" aria-label="Mapa"></main>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+          integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+  <script src="/static/mapa.js"></script>
+</body>
+</html>

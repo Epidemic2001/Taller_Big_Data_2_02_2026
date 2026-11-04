@@ -94,3 +94,28 @@ Cada fila es una fuente con su herramienta de ingesta y su almacenamiento, y el 
 ![Línea de tiempo de los cinco consumos según la velocidad del dato: tiempo real (alertas), casi real (Grafana), por evento (API REST y mapa web), bajo demanda (endpoint de ML) e histórico (notebooks en JupyterLab), con las preguntas que responde cada uno y el almacenamiento que lee](docs/consumo/03_un_sismo_cinco_consumos.png)
 
 El consumo sigue el tipo de ingesta: lo que llega por *streaming* se consume como alerta en segundos; los testimonios por *micro-batch* alimentan el dashboard; el ShakeMap por evento alimenta la API y el mapa; el modelo de ML responde bajo demanda; y el histórico por *batch* y los archivos del CSN se exploran en notebooks. Así, cada almacenamiento tiene un consumo coherente con su dato.
+
+### 🗺️ Implementación del consumo 3: daños y rutas de emergencia en Calama
+
+Aplicación web en `consumo/api_mapa/`: una API **FastAPI** y un **mapa web en Leaflet** que leen directamente de PostgreSQL + PostGIS (y el COG de S3). Para cada sismo con ShakeMap muestra qué **daño potencial** recibió cada sector de Calama y cada instalación crítica. También calcula **rutas de emergencia** sobre la red vial de OpenStreetMap que evitan las calles de mayor intensidad, incluida la ruta al hospital operativo más cercano.
+
+```bash
+docker compose --profile lambda --profile mapa up -d --build
+python consumo/api_mapa/cargar_calama.py      # una vez: red vial y sectores de Calama (OpenStreetMap)
+```
+
+Mapa en <http://localhost:8090> y documentación interactiva de la API en <http://localhost:8090/docs>. Los pasos completos de la demo están en [DEMO.md, sección 11](DEMO.md#11-consumo-api-rest--mapa-web-daños-y-rutas-de-emergencia-postgis--s3).
+
+| Endpoint | Qué entrega |
+| --- | --- |
+| `GET /api/eventos` | Sismos con ShakeMap, ordenados por la intensidad que recibió Calama |
+| `GET /api/eventos/{id}/sectores` | Sectores de Calama con su MMI promedio y máxima y su daño potencial (GeoJSON, `ST_Clip`) |
+| `GET /api/eventos/{id}/infraestructura` | Hospitales, clínicas, subestaciones y faenas con su MMI, PGA y PGV (GeoJSON, `ST_Value`) |
+| `GET /api/eventos/{id}/isosistas` | Polígonos de intensidad MMI del ShakeMap (GeoJSON) |
+| `GET /api/eventos/{id}/resumen` | Sectores, instalaciones y km de calles por nivel de daño |
+| `GET /api/eventos/{id}/red-vial?evitar_mmi=7` | Calles con daño potencial por grado MMI y calles bloqueadas (GeoJSON) |
+| `GET /api/eventos/{id}/ruta?desde=lat,lon&hasta=lat,lon&evitar_mmi=7` | Ruta segura y ruta directa, con distancia, tiempo y exposición a la intensidad (GeoJSON) |
+| `GET /api/eventos/{id}/ruta-hospital?desde=lat,lon&evitar_mmi=7` | Ruta segura al hospital o clínica operativo más cercano (GeoJSON) |
+| `GET /api/eventos/{id}/cog` | ShakeMap completo (Cloud Optimized GeoTIFF de 3 bandas) desde S3 |
+
+La **ruta segura** usa Dijkstra sobre el grafo de la red vial. Cada tramo cuesta su tiempo de viaje multiplicado por un castigo según la intensidad MMI que recibió: 5 veces con MMI VI y 10 veces con MMI VII. Los tramos sobre el umbral `evitar_mmi` quedan bloqueados (cuestan 1000 veces más), así que la ruta solo los usa si no hay otra forma de llegar.
