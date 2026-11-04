@@ -400,8 +400,9 @@ python herramientas/lambda/invocar.py --evento <id_usgs>       # ShakeMap de un 
 
 Para la demo conviene un sismo **cercano a Calama**: los de mayor magnitud de 2026 pueden quedar
 lejos y su ShakeMap no cubrir la ciudad. Esta consulta al USGS lista los sismos M ≥ 6,5 con ShakeMap a
-menos de 300 km de Calama (el `id` de cada uno se pasa a `--evento`):
-<https://earthquake.usgs.gov/fdsnws/event/1/query?format=geojson&latitude=-22.456&longitude=-68.929&maxradiuskm=300&minmagnitude=6.5&producttype=shakemap&orderby=magnitude>
+menos de 300 km de Calama desde 1990 (el `id` de cada uno se pasa a `--evento`; sin `starttime` el USGS
+busca solo en los últimos 30 días):
+<https://earthquake.usgs.gov/fdsnws/event/1/query?format=geojson&starttime=1990-01-01&latitude=-22.456&longitude=-68.929&maxradiuskm=300&minmagnitude=6.5&producttype=shakemap&orderby=magnitude>
 
 | Dónde | Qué guarda |
 |---|---|
