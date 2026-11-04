@@ -24,5 +24,10 @@ networkx>=3.2       # grafo de la red vial para las rutas de emergencia
 scikit-learn==1.9.1 # misma versión que su Dockerfile, para que los modelos .joblib sirvan en ambos
 joblib>=1.4
 
+# Consumo 5: notebooks en JupyterLab (consumo/jupyterlab). Usan también pyiceberg, zarr y obstore.
+jupyterlab>=4.4
+duckdb>=1.4,<2      # SQL sobre las tablas Iceberg (Arrow) y sobre los Parquet del data lake en MinIO
+matplotlib>=3.8
+
 # Opcional: Spark fuera de Docker (en Docker ya viene incluido)
 # pyspark==3.5.3    # requiere Java 17

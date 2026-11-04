@@ -515,6 +515,81 @@ lado se carga en el otro.
 
 ---
 
+## 13. Consumo: notebooks en JupyterLab (Lakehouse Iceberg + Data Lake MinIO)
+
+Un **JupyterLab** con PyIceberg, DuckDB y Zarr que **lee directo del Lakehouse** del catálogo USGS
+(sección 7) **y del Data Lake** del CSN (sección 8), sin copiar datos: consultas ad-hoc e informes
+que no necesitan una aplicación propia. El código está en `consumo/jupyterlab/`.
+
+```bash
+docker compose --profile jupyter up -d --build     # la primera vez construye la imagen (~2 min)
+```
+
+Abran http://localhost:8888 (token: `sismologia`). El perfil también levanta los dos MinIO y el
+catálogo Iceberg, con lo que ya tengan guardado en sus volúmenes. Cada notebook necesita:
+
+| Notebook | Necesita | Si está vacío |
+|---|---|---|
+| `01_sismicidad_catalogo_usgs` | Las tablas Iceberg de la sección 7 | El DAG de Airflow, o con los meses ya extraídos: `python fuentes/usgs_catalogo/lakehouse.py --inicio 2026-01 --fin 2026-10` |
+| `02_senales_csn_datalake` | Tensores curados en el data lake (sección 8) | NiFi y `python fuentes/csn_chile/datalake.py`, o una ventana pasada con `cargar_ventana.py` (abajo) |
+| `03_reentrenamiento_modelo_ml` | Una versión del modelo en `datos/modelos/` (sección 12) | `python consumo/api_ml/entrenar.py`. La API (`--profile ml`) es opcional: si está levantada, suma su monitoreo |
+
+**Un sismo en el data lake.** NiFi solo trae los últimos minutos de señal, así que en una demo lo
+normal es que no haya un sismo. `cargar_ventana.py` hace la misma petición que NiFi para una ventana
+pasada y guarda los miniSEED en la zona raw con la misma ruta y metadatos. El CSN guarda solo unas
+semanas de señal continua: elijan un sismo reciente de esta consulta al USGS (M ≥ 4,5 en Chile en los
+últimos 30 días) y pidan desde un minuto antes de su hora de origen.
+<https://earthquake.usgs.gov/fdsnws/event/1/query?format=geojson&minmagnitude=4.5&minlatitude=-56&maxlatitude=-17&minlongitude=-76&maxlongitude=-66&orderby=magnitude>
+
+```bash
+docker compose --profile datalake up -d                  # si no está levantado el perfil jupyter
+python fuentes/csn_chile/cargar_ventana.py --inicio 2026-10-26T19:30 --fin 2026-10-26T21:00
+python fuentes/csn_chile/datalake.py                     # cura la ventana: cabeceras.parquet y ventanas.zarr
+```
+
+**Qué mostrar:**
+1. **Notebook 01, ¿cómo evoluciona la sismicidad?** El resumen mensual sale de la capa gold que
+   calcula Airflow. Luego, SQL de DuckDB sobre silver: sismos por macrozona y mes, y los diez
+   mayores. El perfil de profundidad muestra la placa de Nazca hundiéndose hacia el este.
+2. **Gutenberg-Richter:** cuántos sismos M5, M6 o M7 cabe esperar por año. La tabla pone lo
+   observado al lado de lo esperado: el valor b sale alto (≈1,5) porque bajo M5,5 casi todo el
+   catálogo viene en magnitud `mb`, y por eso la recta subestima los M6+. Es exploratorio.
+3. **Particiones ocultas:** un filtro por fecha lee 1 de los 11 archivos Parquet, y uno de
+   magnitud ≥ 6 lee 3, porque Iceberg guarda el mínimo y el máximo de cada columna por archivo.
+4. **Time Travel:** el historial de snapshots y la comparación con la versión anterior a la última
+   recarga de un mes: qué sismos se agregaron, con su `event_id`. El informe final cita el snapshot
+   usado y exporta la tabla a `datos/informes/` con ese id en el nombre.
+5. **Notebook 02, el data lake:** SQL de DuckDB **directo sobre `s3://curated`**, sin bajar archivos,
+   y el control de vacíos entre segmentos. Luego, un lote Zarr de 32 ventanas: baja 0,7 MB de un
+   tensor de 2 MB, como un `DataLoader`.
+6. **¿Cómo luce la señal de un sismo?** El mapa de amplitudes de cada ventana, la detección por
+   coincidencia entre estaciones confirmada con el catálogo del Lakehouse, y el sismo ordenado por
+   distancia con las llegadas esperadas de las ondas P y S. Con la ventana del 26-10-2026, cerca del
+   epicentro la P llega donde se calcula; a 700 km llega antes porque viaja por el manto, más rápido.
+   El espectrograma muestra la energía de 1 a 20 Hz del sismo sobre el ruido del oleaje (< 1 Hz).
+7. **Notebook 03, ¿cuándo conviene reentrenar?** Qué snapshot del catálogo estaba vigente al entrenar
+   cada versión del modelo (`snapshot_as_of_timestamp`), los sismos que llegaron después frente al
+   dominio del modelo, qué parte de la sismicidad cubre y la decisión que junta el catálogo con el
+   monitoreo de la API (sección 12, punto 6).
+
+Para dejar los tres notebooks ejecutados de una vez (por ejemplo antes de presentar):
+
+```bash
+docker exec sismo-jupyterlab jupyter nbconvert --to notebook --execute --inplace 01_sismicidad_catalogo_usgs.ipynb 02_senales_csn_datalake.ipynb 03_reentrenamiento_modelo_ml.ipynb
+```
+
+Los notebooks se guardan en la carpeta del proyecto (no en la imagen), con sus resultados. Para
+abrirlos sin Docker, con los almacenamientos levantados y el `.venv` activo:
+`jupyter lab consumo/jupyterlab/notebooks`.
+
+**Limitaciones (díganlas si preguntan):** el valor b y las tasas de Gutenberg-Richter salen de diez
+meses de un catálogo con magnitudes mezcladas; sirven para órdenes de magnitud, no para un estudio de
+peligro sísmico. La detección por coincidencia usa un umbral fijo sobre la amplitud (4 veces lo
+normal en 2 estaciones), y las llegadas P y S usan velocidades constantes, que solo sirven bien a
+menos de unos 300 km.
+
+---
+
 ## Recomendaciones para la presentación
 
 - **Graben un video de cada demo** antes del día, como respaldo si falla internet o Docker.

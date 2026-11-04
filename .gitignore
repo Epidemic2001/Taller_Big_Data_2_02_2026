@@ -3,3 +3,4 @@ __pycache__/
 *.pyc
 datos/
 .env
+.ipynb_checkpoints/

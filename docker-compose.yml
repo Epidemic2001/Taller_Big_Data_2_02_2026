@@ -22,6 +22,8 @@
 #                                                 + PostgreSQL/PostGIS  localhost:5433
 #   docker compose --profile ml      up -d     -> consumo 4: endpoint de Machine Learning  http://localhost:8091
 #                                                 + ClickHouse (data warehouse)  http://localhost:8123/play
+#   docker compose --profile jupyter up -d     -> consumo 5: JupyterLab (notebooks)  http://localhost:8888
+#                                                 + MinIO + catálogo Iceberg (lakehouse) y MinIO del data lake
 #   docker compose --profile consumo up -d     -> los servicios de consumo con sus almacenamientos
 # Detener:  docker compose --profile <perfil> down
 #
@@ -135,9 +137,10 @@ services:
   # MinIO on-premise propio del data lake: NiFi deja aquí cada miniSEED (bucket "raw") y el curado
   # con ObsPy escribe los tensores Zarr para Deep Learning (bucket "curated"). Es una instancia aparte
   # del MinIO del lakehouse para que cada perfil se levante y se borre (down -v) por separado.
+  # También está en "jupyter" y "consumo", porque los notebooks (consumo 5) leen de aquí.
   minio-datalake:
     <<: *minio
-    profiles: ["nifi", "datalake"]
+    profiles: ["nifi", "datalake", "jupyter", "consumo"]
     container_name: sismo-minio-datalake
     ports:
       - "9002:9000"            # API S3 (desde Windows: localhost:9002; desde NiFi: minio-datalake:9000)
@@ -149,7 +152,7 @@ services:
   # a escribir, la versión anterior se conserva (zona cruda inmutable).
   datalake-buckets:
     image: pgsty/minio:RELEASE.2026-08-04T00-00-00Z
-    profiles: ["nifi", "datalake"]
+    profiles: ["nifi", "datalake", "jupyter", "consumo"]
     container_name: sismo-datalake-buckets
     depends_on:
       minio-datalake:
@@ -188,10 +191,11 @@ services:
   # MinIO guarda los archivos (QuakeML bronze y los Parquet + metadatos de las tablas Iceberg) y el
   # catálogo REST de Iceberg registra qué tablas existen y cuál es su versión (snapshot) vigente.
   # Están en el perfil "airflow" para levantarse con el DAG, y en "lakehouse" para consultar sin Airflow.
+  # También en "jupyter" y "consumo", porque los notebooks (consumo 5) leen de aquí.
   # Los datos viven en los volúmenes "minio-datos" e "iceberg-catalogo": solo "down -v" los borra.
   minio:
     <<: *minio
-    profiles: ["airflow", "lakehouse"]
+    profiles: ["airflow", "lakehouse", "jupyter", "consumo"]
     container_name: sismo-minio
     ports:
       - "9000:9000"            # API S3 (la usan PyIceberg y el catálogo)
@@ -201,7 +205,7 @@ services:
 
   iceberg-rest:
     image: apache/iceberg-rest-fixture:1.10.1
-    profiles: ["airflow", "lakehouse"]
+    profiles: ["airflow", "lakehouse", "jupyter", "consumo"]
     container_name: sismo-iceberg-rest
     depends_on:
       minio:
@@ -375,6 +379,33 @@ services:
       CLICKHOUSE_URL: http://clickhouse:8123/
       CLICKHOUSE_USER: admin
       CLICKHOUSE_PASSWORD: sismologia
+    volumes:
+      - .:/opt/sismo
+
+  # ------------------------------------------------------------------ CONSUMO 5: JUPYTERLAB (Lakehouse Iceberg + Data Lake MinIO)
+  # Notebooks para consultas ad-hoc y exploración: tendencias mensuales y Time Travel del catálogo USGS
+  # (PyIceberg + DuckDB) y lectura por lotes de las ventanas de señal del CSN (Zarr + DuckDB sobre MinIO).
+  # Lee directo de los dos almacenamientos, sin copiar datos. Los notebooks están en
+  # consumo/jupyterlab/notebooks/ y se guardan en la carpeta del proyecto (no en la imagen).
+  jupyterlab:
+    build: ./consumo/jupyterlab
+    profiles: ["jupyter", "consumo"]
+    container_name: sismo-jupyterlab
+    depends_on:
+      minio:
+        condition: service_healthy
+      iceberg-rest:
+        condition: service_started
+      minio-datalake:
+        condition: service_healthy
+    ports:
+      - "8888:8888"            # JupyterLab en http://localhost:8888 (token: sismologia)
+    environment:
+      JUPYTER_TOKEN: sismologia
+      LAKEHOUSE_S3_ENDPOINT: http://minio:9000           # desde Windows son localhost:9000 y :8181
+      LAKEHOUSE_CATALOGO_URI: http://iceberg-rest:8181
+      DATALAKE_S3_ENDPOINT: http://minio-datalake:9000   # desde Windows es localhost:9002
+      API_ML_URL: http://api-ml:8091                     # consumo 4, si está levantado
     volumes:
       - .:/opt/sismo
 

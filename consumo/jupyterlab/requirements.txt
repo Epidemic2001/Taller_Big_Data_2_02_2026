@@ -1,0 +1,12 @@
+# Consumo 5 - JupyterLab (PyIceberg + DuckDB + Zarr). Las instala el Dockerfile; fuera de Docker ya
+# vienen en el requirements.txt de la raíz del proyecto.
+jupyterlab>=4.4,<5
+pyiceberg[pyarrow,pyiceberg-core]>=0.10   # Lakehouse: tablas Iceberg del catálogo USGS
+duckdb>=1.4,<2                           # SQL sobre Arrow (Iceberg) y sobre Parquet en MinIO
+zarr>=3                                  # Data Lake CSN: tensores de ventanas de señal
+obstore>=0.6                             # Data Lake CSN: lectura en MinIO (S3)
+pandas>=2.0
+pyarrow>=14
+numpy>=1.26
+matplotlib>=3.8
+requests>=2.31                           # monitoreo del endpoint de ML (consumo 4)

@@ -149,3 +149,23 @@ Simulador en <http://localhost:8091> y documentación interactiva de la API en <
 Gana el de menor error absoluto medio (MAE), y ambos se comparan contra un modelo que predice siempre el promedio. Cada entrenamiento queda como una **versión** en `datos/modelos/intensidad_ems98/`, con su corte de datos y sus métricas. Si un escenario sale del rango de magnitudes, profundidades o distancias vistas al entrenar, responde la ecuación de atenuación (los árboles no extrapolan) y la respuesta lo avisa.
 
 Con los testimonios de 2026 (unos 2.400 de 325 sismos, M2,5–6,9) gana la ecuación de atenuación, con un error medio de 1 grado y un 86 % de aciertos a ±1 grado. Como aún no hay sismos grandes en los datos, subestima los escenarios M7,5+, que vienen marcados como fuera de rango; el detalle está en las limitaciones del DEMO.
+
+### 📓 Implementación del consumo 5: consultas ad-hoc en JupyterLab
+
+Servicio en `consumo/jupyterlab/`: un **JupyterLab** con **PyIceberg**, **DuckDB** y **Zarr** que lee directo del **Lakehouse Iceberg** del catálogo USGS y del **Data Lake MinIO** del CSN, sin copiar datos. Son tres notebooks para la exploración y los informes que no necesitan una aplicación propia: la evolución de la sismicidad, el *Time Travel* entre versiones del catálogo, la señal de un sismo en cada estación y la decisión de cuándo reentrenar el modelo de ML.
+
+```bash
+docker compose --profile jupyter up -d --build   # JupyterLab + MinIO y catálogo Iceberg + MinIO del data lake
+```
+
+JupyterLab en <http://localhost:8888> (token `sismologia`). Los pasos completos de la demo están en [DEMO.md, sección 13](DEMO.md#13-consumo-notebooks-en-jupyterlab-lakehouse-iceberg--data-lake-minio).
+
+| Notebook | Lee | Qué responde |
+| --- | --- | --- |
+| `01_sismicidad_catalogo_usgs.ipynb` | Lakehouse: `gold.usgs_resumen_mensual` y `silver.usgs_sismos` | Sismos por mes y por macrozona, mapa y perfil de profundidad (la subducción de Nazca), ley de Gutenberg-Richter, lectura selectiva por particiones ocultas y *Time Travel* entre dos versiones del catálogo. Exporta la tabla del informe con el id del snapshot usado |
+| `02_senales_csn_datalake.ipynb` | Data Lake: buckets `raw` y `curated` (y el catálogo USGS para cruzar) | Inventario de miniSEED, cabeceras y continuidad con SQL directo sobre MinIO, lectura de un lote Zarr para Deep Learning, detección de sismos por coincidencia entre estaciones confirmada con el catálogo, y la señal y el espectrograma de un sismo |
+| `03_reentrenamiento_modelo_ml.ipynb` | Lakehouse y las versiones del modelo del consumo 4 (y su API, si está levantada) | Qué versión del catálogo existía cuando se entrenó cada modelo, qué sismos llegaron después, qué parte de la sismicidad cubre el dominio del modelo y si conviene reentrenar |
+
+**Cómo se consulta:** PyIceberg pregunta al catálogo REST qué archivos Parquet forman la versión pedida de la tabla y entrega el resultado como Arrow, que DuckDB consulta con SQL en memoria (`scan().to_duckdb()`). En el Data Lake, DuckDB lee los `cabeceras.parquet` directo desde `s3://curated` con su extensión `httpfs` (las carpetas `anio=` y `dia_juliano=` pasan a ser columnas), y Zarr descarga del tensor solo los bloques de 32 ventanas que se piden, como lo haría un `DataLoader`. Las conexiones están en `consumo/jupyterlab/notebooks/conexiones.py`: en Docker usan los nombres de los servicios y, si no están esas variables de entorno, `localhost`, así que los notebooks también se abren desde Windows con el `.venv`.
+
+Con los datos de 2026 (653 sismos del catálogo hasta el 3 de noviembre y la señal del CSN del 26 de octubre): el Norte Grande concentra el 60 % de los sismos y casi todos son de profundidad intermedia (solo un 15 % a menos de 70 km). Al recargar octubre completo, el *Time Travel* muestra los 24 sismos que faltaban en la versión anterior. En el data lake, la detección por coincidencia encuentra los tres sismos M4,6–4,9 de esa tarde y una cuarta señal que no está en el catálogo USGS (un sismo menor o ruido local), y en las estaciones a menos de 300 km la onda P llega donde se calcula. El modelo de ML cubre el 94 % de los sismos M ≥ 4 del catálogo; los que quedan fuera son más profundos que los 207 km de sus testimonios, y por ahora no hace falta reentrenarlo.
