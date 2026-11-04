@@ -20,6 +20,8 @@
 #   docker compose --profile geoespacial up -d -> solo PostGIS + pgAdmin (consultar lo guardado)
 #   docker compose --profile mapa    up -d     -> consumo 3: API REST + mapa web  http://localhost:8090
 #                                                 + PostgreSQL/PostGIS  localhost:5433
+#   docker compose --profile ml      up -d     -> consumo 4: endpoint de Machine Learning  http://localhost:8091
+#                                                 + ClickHouse (data warehouse)  http://localhost:8123/play
 #   docker compose --profile consumo up -d     -> los servicios de consumo con sus almacenamientos
 # Detener:  docker compose --profile <perfil> down
 #
@@ -245,11 +247,12 @@ services:
   # ClickHouse: base OLAP columnar con el modelo estrella de los testimonios. Al arrancar ejecuta
   # herramientas/clickhouse/esquema.sql (todo IF NOT EXISTS). Está en el perfil "spark" para recibir
   # los micro-batches, y en "warehouse" para consultar sin Spark. El puerto 8123 sirve las consultas
-  # HTTP, el JDBC de Spark y un editor SQL web en /play.
+  # HTTP, el JDBC de Spark y un editor SQL web en /play. También está en "ml" y "consumo", porque el
+  # endpoint de Machine Learning (consumo 4) entrena con estos testimonios.
   # Los datos viven en el volumen "clickhouse-datos": solo "down -v" los borra.
   clickhouse:
     image: clickhouse/clickhouse-server:26.8
-    profiles: ["spark", "warehouse"]
+    profiles: ["spark", "warehouse", "ml", "consumo"]
     container_name: sismo-clickhouse
     ports:
       - "8123:8123"
@@ -351,6 +354,27 @@ services:
     environment:
       POSTGIS_URL: postgresql://admin:sismologia@postgis:5432/sismologia
       S3_ENDPOINT: http://localstack:4566
+    volumes:
+      - .:/opt/sismo
+
+  # ------------------------------------------------------------------ CONSUMO 4: ENDPOINT DE MACHINE LEARNING (ClickHouse)
+  # FastAPI + scikit-learn: con magnitud, profundidad y distancia al epicentro responde la intensidad
+  # EMS-98 esperada y el nivel de daño. Entrena con los testimonios de ClickHouse (vista v_testimonios)
+  # y guarda cada versión del modelo en datos/modelos/intensidad_ems98/. Al arrancar carga la última;
+  # si no hay, entrena una. Sirve también un simulador web de escenarios.
+  api-ml:
+    build: ./consumo/api_ml
+    profiles: ["ml", "consumo"]
+    container_name: sismo-api-ml
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    ports:
+      - "8091:8091"            # simulador en http://localhost:8091, documentación de la API en /docs
+    environment:
+      CLICKHOUSE_URL: http://clickhouse:8123/
+      CLICKHOUSE_USER: admin
+      CLICKHOUSE_PASSWORD: sismologia
     volumes:
       - .:/opt/sismo
 

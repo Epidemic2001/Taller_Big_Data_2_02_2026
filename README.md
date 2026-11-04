@@ -119,3 +119,33 @@ Mapa en <http://localhost:8090> y documentación interactiva de la API en <http:
 | `GET /api/eventos/{id}/cog` | ShakeMap completo (Cloud Optimized GeoTIFF de 3 bandas) desde S3 |
 
 La **ruta segura** usa Dijkstra sobre el grafo de la red vial. Cada tramo cuesta su tiempo de viaje multiplicado por un castigo según la intensidad MMI que recibió: 5 veces con MMI VI y 10 veces con MMI VII. Los tramos sobre el umbral `evitar_mmi` quedan bloqueados (cuestan 1000 veces más), así que la ruta solo los usa si no hay otra forma de llegar.
+
+### 🤖 Implementación del consumo 4: endpoint de Machine Learning
+
+Servicio en `consumo/api_ml/`: una API **FastAPI** con un modelo de **scikit-learn** entrenado con los testimonios ciudadanos que Spark carga en el **Data Warehouse de ClickHouse** (vista `v_testimonios`). Recibe la magnitud, la profundidad y la distancia al epicentro, y responde la **intensidad EMS-98 esperada**, su grado, el **nivel de daño** y su incertidumbre. Sirve para simular escenarios de planes de emergencia comunales y de diseño de obras. Incluye un simulador web con la curva de atenuación y la intensidad esperada en cada capital regional.
+
+```bash
+docker compose --profile spark --profile ml up -d --build   # Spark + ClickHouse + el endpoint de ML
+python fuentes/emsc_lastquake/sondeo.py --desde 2026-01-01 --ciclos 1   # testimonios para entrenar
+```
+
+Simulador en <http://localhost:8091> y documentación interactiva de la API en <http://localhost:8091/docs>. Los pasos completos de la demo están en [DEMO.md, sección 12](DEMO.md#12-consumo-endpoint-de-machine-learning-clickhouse--scikit-learn).
+
+| Endpoint | Qué entrega |
+| --- | --- |
+| `GET /api/predecir?magnitud=7&profundidad_km=35&distancia_km=60` | Intensidad EMS-98 esperada, grado, nivel de daño, intervalo del 80 % y probabilidad de cada nivel de daño |
+| `POST /api/predecir` | Lo mismo para hasta 1.000 escenarios en una llamada (por ejemplo, todos los de un plan de emergencia) |
+| `GET /api/curva-atenuacion?magnitud=7&profundidad_km=35` | Cómo baja la intensidad esperada con la distancia |
+| `GET /api/ciudades?magnitud=7&profundidad_km=35&latitud=-23.6&longitud=-70.9` | Intensidad y daño esperados en cada capital regional y en Calama para un epicentro |
+| `GET /api/modelo` · `GET /api/modelo/versiones` | Modelo vigente (algoritmo, corte de datos, rango de entrenamiento y métricas) y todas sus versiones |
+| `GET /api/modelo/evaluacion` | Monitoreo: error del modelo con los testimonios llegados después de su corte y si conviene reentrenar |
+| `POST /api/modelo/reentrenar` | Entrena una versión nueva con lo que hoy tiene ClickHouse y la deja vigente |
+
+**Cómo se entrena:** se comparan dos modelos con validación cruzada **agrupada por sismo** (`GroupKFold`). Así, los testimonios de un mismo sismo nunca quedan a la vez en entrenamiento y en prueba, y el error medido es el de un sismo que el modelo no vio. Los dos candidatos son:
+
+- una **ecuación de atenuación** clásica, `I = c0 + c1·M + c2·ln(R) + c3·R` (con R la distancia hipocentral), cuyos signos están restringidos para que sea físicamente consistente;
+- un **gradient boosting** (`HistGradientBoostingRegressor`) con restricciones monótonas: la intensidad solo puede subir con la magnitud y bajar con la distancia.
+
+Gana el de menor error absoluto medio (MAE), y ambos se comparan contra un modelo que predice siempre el promedio. Cada entrenamiento queda como una **versión** en `datos/modelos/intensidad_ems98/`, con su corte de datos y sus métricas. Si un escenario sale del rango de magnitudes, profundidades o distancias vistas al entrenar, responde la ecuación de atenuación (los árboles no extrapolan) y la respuesta lo avisa.
+
+Con los testimonios de 2026 (unos 2.400 de 325 sismos, M2,5–6,9) gana la ecuación de atenuación, con un error medio de 1 grado y un 86 % de aciertos a ±1 grado. Como aún no hay sismos grandes en los datos, subestima los escenarios M7,5+, que vienen marcados como fuera de rango; el detalle está en las limitaciones del DEMO.

@@ -20,5 +20,9 @@ fastapi>=0.115
 uvicorn>=0.30
 networkx>=3.2       # grafo de la red vial para las rutas de emergencia
 
+# Consumo 4: endpoint de Machine Learning (consumo/api_ml). Usa también fastapi y uvicorn.
+scikit-learn==1.9.1 # misma versión que su Dockerfile, para que los modelos .joblib sirvan en ambos
+joblib>=1.4
+
 # Opcional: Spark fuera de Docker (en Docker ya viene incluido)
 # pyspark==3.5.3    # requiere Java 17

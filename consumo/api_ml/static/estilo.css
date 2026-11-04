@@ -1,0 +1,117 @@
+:root {
+  --fondo: #eef1f5;
+  --panel: #ffffff;
+  --texto: #1d2433;
+  --suave: #5b6475;
+  --borde: #d9dee7;
+  --acento: #6a3fc0;          /* violeta del consumo 4 en las láminas */
+  --acento-suave: #efe9fb;
+  --peligro: #b71c1c;
+  --peligro-suave: #fdecea;
+  --aviso: #8a5a00;
+  --aviso-suave: #fff4dc;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; min-height: 100%; }
+body {
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  color: var(--texto);
+  background: var(--fondo);
+  display: grid;
+  grid-template-columns: 380px 1fr;
+}
+
+#panel { height: 100vh; position: sticky; top: 0; overflow-y: auto; background: var(--panel);
+         border-right: 1px solid var(--borde); }
+main { padding: 20px; display: grid; gap: 16px; align-content: start; max-width: 1100px; }
+
+header { padding: 18px 20px 14px; border-bottom: 1px solid var(--borde); }
+header h1 { font-size: 19px; margin: 0 0 2px; letter-spacing: -0.01em; }
+header p { margin: 0; color: var(--suave); font-size: 13px; }
+
+section { padding: 14px 20px 16px; border-bottom: 1px solid var(--borde); }
+h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--suave);
+     margin: 0 0 10px; font-weight: 600; }
+.ayuda { color: var(--suave); font-size: 12.5px; margin: 8px 0 0; }
+footer { padding: 14px 20px; color: var(--suave); font-size: 12px; }
+footer a, a { color: var(--acento); }
+
+.control { margin-bottom: 12px; }
+.control label { display: flex; justify-content: space-between; margin-bottom: 4px; }
+.control strong { font-variant-numeric: tabular-nums; }
+input[type="range"] { width: 100%; accent-color: var(--acento); }
+select, input, button { font: inherit; }
+
+.tarjeta { background: var(--panel); border: 1px solid var(--borde); border-radius: 12px; padding: 16px 18px; }
+.tarjeta > h2 { margin-bottom: 4px; }
+
+/* resultado principal */
+.resultado { display: grid; grid-template-columns: 74px 1fr; gap: 14px; align-items: center; }
+.grado { width: 74px; height: 74px; border-radius: 14px; display: grid; place-items: center;
+         font-size: 26px; font-weight: 700; border: 1px solid rgba(0, 0, 0, 0.15); }
+.valor { font-size: 30px; font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums; }
+.valor small { font-size: 13px; font-weight: 500; color: var(--suave); }
+.nombre { font-weight: 600; margin-top: 4px; }
+.intervalo { color: var(--suave); font-size: 12.5px; }
+.danio { margin-top: 12px; }
+.etiqueta { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 12px; font-weight: 600;
+            white-space: nowrap; }
+.nivel-sin-dano { background: #e6f4ea; color: #1e6b34; }
+.nivel-leve { background: #fff8c5; color: #6b5800; }
+.nivel-moderado { background: #ffe5c2; color: #8a4b00; }
+.nivel-grave { background: var(--peligro-suave); color: var(--peligro); }
+.aviso { margin-top: 12px; padding: 8px 10px; border-radius: 8px; background: var(--aviso-suave);
+         color: var(--aviso); font-size: 12.5px; }
+.error { padding: 10px 12px; border-radius: 8px; background: var(--peligro-suave); color: var(--peligro); }
+
+/* barras de probabilidad */
+.barra { display: grid; grid-template-columns: 74px 1fr 40px; gap: 8px; align-items: center; margin: 5px 0; }
+.barra .pista { height: 10px; background: #edf0f4; border-radius: 6px; overflow: hidden; }
+.barra .relleno { height: 100%; border-radius: 6px; transition: width 0.2s; }
+.barra span:last-child { text-align: right; font-variant-numeric: tabular-nums; color: var(--suave); }
+
+/* curva */
+#curva { width: 100%; height: auto; display: block; margin-top: 6px; }
+#curva text { font-size: 11px; fill: var(--suave); }
+.leyenda-curva { display: flex; gap: 18px; color: var(--suave); font-size: 12px; flex-wrap: wrap; }
+.leyenda-curva i { display: inline-block; width: 22px; height: 10px; margin-right: 6px; vertical-align: middle; }
+.leyenda-curva .linea { height: 0; border-top: 3px solid var(--acento); }
+.leyenda-curva .linea.punteada { border-top-style: dashed; }
+.leyenda-curva .banda { background: rgba(106, 63, 192, 0.18); border-radius: 2px; }
+
+/* ciudades */
+.epicentro { display: flex; gap: 12px; flex-wrap: wrap; align-items: end; margin-top: 8px; }
+.epicentro label { display: grid; gap: 3px; font-size: 12.5px; color: var(--suave); }
+.epicentro select, .epicentro input { padding: 6px 8px; border: 1px solid var(--borde); border-radius: 8px;
+                                      color: var(--texto); background: #fff; }
+.epicentro input { width: 100px; }
+
+table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 13px; }
+th { text-align: left; font-weight: 600; color: var(--suave); font-size: 12px; border-bottom: 1px solid var(--borde);
+     padding: 6px 8px; }
+td { padding: 6px 8px; border-bottom: 1px solid #f0f2f6; font-variant-numeric: tabular-nums; }
+td.num, th.num { text-align: right; white-space: nowrap; }
+#ciudades td:first-child { white-space: nowrap; }
+.punto { display: inline-block; width: 11px; height: 11px; border-radius: 3px; margin-right: 6px;
+         vertical-align: -1px; border: 1px solid rgba(0, 0, 0, 0.2); }
+tr.elegido td { font-weight: 700; }
+
+/* modelo */
+.ficha { display: grid; grid-template-columns: 170px 1fr; gap: 4px 12px; margin: 6px 0 4px; }
+.ficha dt { color: var(--suave); }
+.ficha dd { margin: 0; }
+code { font-size: 12.5px; background: #f3f4f8; padding: 1px 5px; border-radius: 4px; }
+.botones { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+button { padding: 7px 12px; border: 1px solid var(--borde); border-radius: 8px; background: #fff; cursor: pointer; }
+button:hover { border-color: var(--acento); }
+button.principal { background: var(--acento); color: #fff; border-color: var(--acento); }
+button:disabled { opacity: 0.55; cursor: wait; }
+#evaluacion ul { margin: 8px 0 0; padding-left: 18px; }
+.veredicto { margin-top: 12px; padding: 10px 12px; border-radius: 8px; background: var(--acento-suave); }
+.veredicto.si { background: var(--aviso-suave); color: var(--aviso); }
+
+@media (max-width: 900px) {
+  body { grid-template-columns: 1fr; }
+  #panel { height: auto; position: static; }
+}

@@ -439,6 +439,81 @@ Para correr la API sin Docker (con PostGIS levantado): `python consumo/api_mapa/
 
 ---
 
+## 12. Consumo: endpoint de Machine Learning (ClickHouse + scikit-learn)
+
+Un modelo de **scikit-learn** servido con **FastAPI** que **entrena directo del Data Warehouse** de
+testimonios (sección 9), sin copiar datos. Con la magnitud, la profundidad y la distancia al epicentro,
+responde qué **intensidad EMS-98** se sentiría y qué **nivel de daño** se espera. Sirve para simular
+escenarios de planes de emergencia comunales y de diseño de obras. El código está en `consumo/api_ml/`.
+
+```bash
+docker compose --profile spark --profile ml up -d --build     # Spark + ClickHouse + el endpoint de ML
+python fuentes/emsc_lastquake/sondeo.py --desde 2026-01-01 --ciclos 1   # testimonios de todo 2026
+docker logs -f sismo-spark                                    # esperen el "[warehouse] micro-batch ..."
+python consumo/api_ml/entrenar.py                             # entrena y muestra la comparación de modelos
+```
+
+Si ClickHouse ya tiene testimonios (volumen `clickhouse-datos`), basta con
+`docker compose --profile ml up -d --build`: la API carga el último modelo guardado o, si no hay
+ninguno, entrena uno al arrancar. Se necesitan al menos 50 testimonios de 3 sismos; mientras más
+sismos y de más magnitudes, mejor (por eso el sondeo desde enero).
+
+| Dónde | Qué guarda |
+|---|---|
+| ClickHouse `v_testimonios` | Lo que lee para entrenar: intensidad corregida, distancia al epicentro, magnitud y profundidad de cada testimonio |
+| `datos/modelos/intensidad_ems98/vAAAAMMDDTHHMMSS.joblib` | Cada versión del modelo: el elegido, la ecuación de atenuación y los errores de la validación |
+| `datos/modelos/intensidad_ems98/vAAAAMMDDTHHMMSS.json` | Sus metadatos: corte de datos, rango de entrenamiento, métricas de cada candidato y versión de scikit-learn |
+
+**Qué mostrar:**
+1. **Entrenamiento** (`entrenar.py`): la tabla compara la ecuación de atenuación, el gradient boosting
+   y una referencia que siempre predice el promedio, con MAE, RMSE, R² y acierto de grado. La
+   validación es **agrupada por sismo** (`GroupKFold`): el error es el de un sismo que el modelo no
+   vio, no el de testimonios sueltos de sismos que ya conoce. Con los testimonios de 2026, un KFold
+   aleatorio le daba al gradient boosting R² 0,11 y lo dejaba empatado con la ecuación. Agrupado
+   baja a 0,08 y pierde: el boosting había aprendido el ruido de cada sismo, y sin agrupar se
+   habría elegido el modelo equivocado.
+2. **Simulador** en http://localhost:8091: con los deslizadores de magnitud, profundidad y distancia
+   se ve la intensidad esperada, su grado EMS-98, el daño y la probabilidad de cada nivel de daño.
+   La **curva de atenuación** muestra cómo baja la intensidad con la distancia y desde dónde se
+   espera daño leve, moderado o grave.
+3. **¿Qué daño se espera en esta comuna?** La tabla de ciudades calcula, para un epicentro (por
+   ejemplo, *Frente a Antofagasta*), la intensidad en cada capital regional y en Calama.
+4. **La API REST** en http://localhost:8091/docs: *POST /api/predecir* con el ejemplo que trae
+   (tres escenarios de un plan de emergencia) responde todos en una sola llamada. Una aplicación
+   externa consumiría este mismo JSON.
+5. **Fuera de rango:** suban la magnitud por sobre la mayor que vio el modelo. La línea de la curva
+   se vuelve punteada y aparece el aviso: los árboles no extrapolan, así que responde la ecuación de
+   atenuación, que sigue la forma física, y lo deja indicado en `modelo_usado` y `aviso`.
+6. **ML en producción:** *¿Conviene reentrenar?* (`GET /api/modelo/evaluacion`) mide el error del
+   modelo con los testimonios que llegaron después de su corte. Recomienda reentrenar si llegaron
+   muchos (25 % o más de los usados), si el error subió más de 25 % o si llegó un sismo más grande
+   que el mayor visto. Ejecuten otro ciclo de sondeo, esperen el micro-batch y prueben de nuevo;
+   *Reentrenar ahora* crea una versión nueva sin reiniciar la API (`GET /api/modelo/versiones`).
+
+**Cómo se calcula:** la intensidad de cada testimonio es la corregida de LastQuake (escala EMS-98) y
+el nivel de daño usa los mismos cortes que Spark en el warehouse: VI leve, VII moderado y VIII o más
+grave. La ecuación de atenuación es `I = c0 + c1·M + c2·ln(R) + c3·R`, con R la distancia hipocentral.
+Sus signos están restringidos (c1 ≥ 0, c2 ≤ 0, c3 ≤ 0) para que la intensidad nunca vuelva a subir
+lejos del epicentro: los testimonios tienen el sesgo de que solo reporta quien sintió el sismo, y sin
+la restricción eso puede pasar. El intervalo del 80 % y las probabilidades de daño salen de los
+errores que tuvo el modelo en la validación cruzada.
+
+**Limitaciones (díganlas si preguntan):** con los testimonios de 2026 (unos 2.400 de 325 sismos,
+M2,5–6,9) gana la ecuación de atenuación, con un error medio de 1 grado, un R² de 0,09 y un 86 % de
+aciertos a ±1 grado (contra 83 % de la referencia). El R² es bajo porque cada testimonio es una
+percepción individual: en un mismo lugar, una persona reporta III y otra V. Por eso importan el
+intervalo y las probabilidades, no solo el valor central. Además, como no hay sismos grandes en los
+datos, el modelo **subestima los escenarios M7,5+** (un M8 a 60 km da V). Por eso esos escenarios
+vienen marcados como fuera de rango. LastQuake casi no tiene testimonios de los grandes sismos
+antiguos (unos 10 del Maule 2010), así que el rango se amplía cuando ocurra un sismo grande en
+Chile: la evaluación lo detecta y recomienda reentrenar.
+
+Para correr la API sin Docker (con ClickHouse levantado): `python consumo/api_ml/app.py`. El
+contenedor y el `.venv` usan la misma versión de scikit-learn, así que un modelo entrenado en un
+lado se carga en el otro.
+
+---
+
 ## Recomendaciones para la presentación
 
 - **Graben un video de cada demo** antes del día, como respaldo si falla internet o Docker.

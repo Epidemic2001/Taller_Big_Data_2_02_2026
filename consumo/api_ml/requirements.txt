@@ -1,0 +1,10 @@
+# Consumo 4 - Endpoint de Machine Learning (FastAPI + scikit-learn). Las instala el Dockerfile; fuera
+# de Docker ya vienen en el requirements.txt de la raíz del proyecto.
+fastapi>=0.115
+uvicorn>=0.30
+# Misma versión que en Windows: un .joblib entrenado en un lado se puede cargar en el otro
+scikit-learn==1.9.1
+joblib>=1.4
+numpy>=1.26
+pandas>=2.0
+requests>=2.31         # interfaz HTTP de ClickHouse

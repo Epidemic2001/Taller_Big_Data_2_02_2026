@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Intensidad sísmica esperada · Endpoint de Machine Learning</title>
+  <link rel="stylesheet" href="/static/estilo.css">
+</head>
+<body>
+  <aside id="panel">
+    <header>
+      <h1>Intensidad sísmica esperada</h1>
+      <p>Modelo de ML entrenado con los testimonios ciudadanos de LastQuake (ClickHouse)</p>
+    </header>
+
+    <section>
+      <h2>Escenario</h2>
+      <div class="control">
+        <label for="magnitud"><span>Magnitud</span><strong id="magnitud-texto"></strong></label>
+        <input id="magnitud" type="range" min="3" max="9" step="0.1" value="6.5">
+      </div>
+      <div class="control">
+        <label for="profundidad"><span>Profundidad</span><strong id="profundidad-texto"></strong></label>
+        <input id="profundidad" type="range" min="0" max="250" step="5" value="35">
+      </div>
+      <div class="control">
+        <label for="distancia"><span>Distancia al epicentro</span><strong id="distancia-texto"></strong></label>
+        <input id="distancia" type="range" min="0" max="400" step="5" value="60">
+      </div>
+    </section>
+
+    <section>
+      <h2>Intensidad esperada</h2>
+      <div id="resultado"><p class="ayuda">Calculando…</p></div>
+    </section>
+
+    <section>
+      <h2>Nivel de daño</h2>
+      <div id="probabilidades"></div>
+      <p class="ayuda">Probabilidad de cada nivel según los errores que el modelo tuvo en la validación
+        (sismos que no vio al entrenar). Umbrales EMS-98: VI leve, VII moderado, VIII o más grave.</p>
+    </section>
+
+    <footer>
+      <a href="/docs" target="_blank" rel="noopener">API REST (documentación)</a> ·
+      <a href="/api/modelo" target="_blank" rel="noopener">Modelo vigente (JSON)</a><br>
+      Testimonios © EMSC LastQuake (CC BY 4.0)
+    </footer>
+  </aside>
+
+  <main>
+    <article class="tarjeta">
+      <h2>Curva de atenuación</h2>
+      <p class="ayuda" id="curva-titulo"></p>
+      <svg id="curva" viewBox="0 0 760 330" role="img" aria-label="Intensidad esperada según la distancia"></svg>
+      <div class="leyenda-curva">
+        <span><i class="linea"></i>Intensidad esperada</span>
+        <span><i class="banda"></i>Intervalo del 80 %</span>
+        <span><i class="linea punteada"></i>Fuera del rango de entrenamiento</span>
+      </div>
+    </article>
+
+    <article class="tarjeta">
+      <h2>¿Qué daño se espera en cada ciudad?</h2>
+      <div class="epicentro">
+        <label>Epicentro
+          <select id="preset">
+            <option value="-23.6,-70.9">Frente a Antofagasta</option>
+            <option value="-22.3,-68.6">Cerca de Calama</option>
+            <option value="-20.0,-70.6">Frente a Iquique</option>
+            <option value="-33.0,-72.0">Frente a Valparaíso</option>
+            <option value="-36.5,-73.3">Frente a Concepción</option>
+            <option value="">Otro (latitud, longitud)</option>
+          </select>
+        </label>
+        <label>Latitud <input id="lat" type="number" step="0.1" min="-90" max="90" value="-23.6"></label>
+        <label>Longitud <input id="lon" type="number" step="0.1" min="-180" max="180" value="-70.9"></label>
+      </div>
+      <p class="ayuda">Usa la magnitud y la profundidad del escenario. Capitales regionales y Calama.</p>
+      <div id="ciudades"></div>
+    </article>
+
+    <article class="tarjeta">
+      <h2>Modelo vigente</h2>
+      <div id="modelo"><p class="ayuda">Cargando…</p></div>
+      <div class="botones">
+        <button id="btn-evaluar">¿Conviene reentrenar?</button>
+        <button id="btn-reentrenar" class="principal">Reentrenar ahora</button>
+      </div>
+      <div id="evaluacion"></div>
+    </article>
+  </main>
+
+  <script src="/static/simulador.js"></script>
+</body>
+</html>
