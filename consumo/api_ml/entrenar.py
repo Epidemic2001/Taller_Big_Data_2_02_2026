@@ -9,6 +9,7 @@ script sirve para entrenar desde la terminal y ver la comparación de los modelo
 from __future__ import annotations
 
 import argparse
+import io
 import sys
 from pathlib import Path
 
@@ -36,7 +37,8 @@ def imprimir(meta: dict) -> None:
 
 
 if __name__ == "__main__":
-    sys.stdout.reconfigure(encoding="utf-8")  # la consola de Windows (cp1252) no tiene "√" ni "²"
+    if isinstance(sys.stdout, io.TextIOWrapper):  # la consola de Windows (cp1252) no tiene "√" ni "−"
+        sys.stdout.reconfigure(encoding="utf-8")
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--versiones", action="store_true", help="lista las versiones guardadas y termina")
     a = ap.parse_args()

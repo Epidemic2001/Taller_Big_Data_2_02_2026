@@ -151,7 +151,9 @@ def crear(nombre: str) -> Pipeline:
                          # complejidad solo aprende el ruido de cada sismo (se probó en la validación)
                          ("regresor", HistGradientBoostingRegressor(
                              monotonic_cst=[1, 0, -1], learning_rate=0.05, max_iter=100, max_leaf_nodes=7,
-                             min_samples_leaf=100, l2_regularization=1.0, early_stopping=False, random_state=0))])
+                             min_samples_leaf=100, l2_regularization=1.0, random_state=0,
+                             # scikit-learn acepta "auto" o un bool; sus tipos solo declaran str
+                             early_stopping=False))])  # pyright: ignore[reportArgumentType]
     if nombre == "referencia_promedio":     # predice siempre el promedio: el piso que hay que superar
         return Pipeline([("regresor", DummyRegressor())])
     raise ValueError(nombre)
@@ -192,13 +194,13 @@ def entrenar(datos: pd.DataFrame | None = None, carpeta: Path = CARPETA_MODELOS)
     if datos is None:
         datos = cargar_testimonios()
     datos = datos.dropna(subset=ENTRADAS + ["intensidad", "unid"])
-    n_sismos = datos["unid"].nunique()
-    if len(datos) < MIN_TESTIMONIOS or n_sismos < MIN_SISMOS:
+    X, y, grupos = preparar(datos)
+    n_sismos = len(np.unique(grupos))
+    if len(y) < MIN_TESTIMONIOS or n_sismos < MIN_SISMOS:
         raise DatosInsuficientes(
-            f"Hay {len(datos)} testimonios de {n_sismos} sismos en ClickHouse; se necesitan al menos "
+            f"Hay {len(y)} testimonios de {n_sismos} sismos en ClickHouse; se necesitan al menos "
             f"{MIN_TESTIMONIOS} testimonios de {MIN_SISMOS} sismos. Carguen testimonios con el sondeo de "
             "LastQuake y Spark (DEMO.md, sección 4) y vuelvan a entrenar.")
-    X, y, grupos = preparar(datos)
     k = min(5, n_sismos)
 
     validacion, residuos = {}, {}
@@ -216,20 +218,18 @@ def entrenar(datos: pd.DataFrame | None = None, carpeta: Path = CARPETA_MODELOS)
 
     ahora = datetime.now(timezone.utc)
     version = f"v{ahora:%Y%m%dT%H%M%S}"
-    sismos = datos.groupby("unid").agg(magnitud=("magnitud", "first"), profundidad_km=("profundidad_km", "first"))
+    # rango de entrenamiento: cada testimonio trae la magnitud y la profundidad de su sismo
+    minimos, maximos = X.min(axis=0).round(1), X.max(axis=0).round(1)
+    dominio = {nombre: [float(minimos[j]), float(maximos[j])] for j, nombre in enumerate(ENTRADAS)}
     meta = {
         "version": version,
         "entrenado_utc": ahora.isoformat(timespec="seconds"),
         "algoritmo": elegido,
         "descripcion": CANDIDATOS[elegido],
         "fuente": "ClickHouse · sismologia.v_testimonios (testimonios EMSC LastQuake)",
-        "corte_datos": {"testimonios": int(len(datos)), "sismos": int(n_sismos),
+        "corte_datos": {"testimonios": len(y), "sismos": n_sismos,
                         "desde_utc": str(datos["tiempo_utc"].min()), "hasta_utc": str(datos["tiempo_utc"].max())},
-        "dominio": {"magnitud": [round(float(sismos["magnitud"].min()), 1), round(float(sismos["magnitud"].max()), 1)],
-                    "profundidad_km": [round(float(sismos["profundidad_km"].min()), 1),
-                                       round(float(sismos["profundidad_km"].max()), 1)],
-                    "distancia_km": [round(float(datos["distancia_km"].min()), 1),
-                                     round(float(datos["distancia_km"].max()), 1)]},
+        "dominio": dominio,
         "validacion": {"metodo": f"GroupKFold por sismo (k={k}): cada sismo lo predice un modelo que no lo vio",
                        "metricas": validacion},
         "ecuacion_atenuacion": {
@@ -332,11 +332,11 @@ class Predictor:
                     "reentrenar": False,
                     "motivos": ["No hay testimonios posteriores al corte: el modelo está al día con el warehouse."]}
 
-        X, y, _ = preparar(nuevos)
+        X, y, grupos = preparar(nuevos)
         p, _, _ = self.intensidades(X)
         m = metricas(y, p)
-        sismos = nuevos.groupby("unid")["magnitud"].first()
-        sismos_nuevos = sorted(set(sismos.index) - self.sismos)
+        magnitudes = {str(u): float(mag) for u, mag in zip(grupos, X[:, 0], strict=True)}   # sismo -> magnitud
+        sismos_nuevos = sorted(set(magnitudes) - self.sismos)
         motivos = []
         proporcion = len(nuevos) / corte["testimonios"]
         if proporcion >= 0.25:
@@ -346,12 +346,12 @@ class Predictor:
             motivos.append(f"Con los testimonios nuevos el error (MAE {m['mae']:.2f}) supera en más de 25 % al "
                            f"de la validación ({mae_validacion:.2f}): los datos cambiaron.")
         mmax = self.meta["dominio"]["magnitud"][1]
-        mayores = sismos[sismos > mmax]
-        if not mayores.empty:
+        mayores = {u: mag for u, mag in sorted(magnitudes.items()) if mag > mmax}
+        if mayores:
             motivos.append(f"Llegaron sismos de magnitud mayor a la máxima vista al entrenar (M{mmax:g}): "
                            + ", ".join(f"{u} M{mag:g}" for u, mag in mayores.items())
                            + ". Reentrenar amplía el rango donde el modelo es confiable.")
-        return {**respuesta, "testimonios_nuevos": int(len(nuevos)), "sismos_nuevos": sismos_nuevos,
+        return {**respuesta, "testimonios_nuevos": len(nuevos), "sismos_nuevos": sismos_nuevos,
                 "metricas_nuevos": m, "reentrenar": bool(motivos),
                 "motivos": motivos or [f"Llegaron {len(nuevos)} testimonios nuevos y el error se mantiene "
                                        f"(MAE {m['mae']:.2f} frente a {mae_validacion:.2f}): no hace falta reentrenar."]}

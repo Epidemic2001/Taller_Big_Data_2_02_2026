@@ -126,7 +126,7 @@ def predecir_lote(lote: Lote):
     e = lote.escenarios
     resultados = p.predecir([x.magnitud for x in e], [x.profundidad_km for x in e], [x.distancia_km for x in e])
     return {"version_modelo": p.version,
-            "escenarios": [{"escenario": x.model_dump(), **r} for x, r in zip(e, resultados)]}
+            "escenarios": [{"escenario": x.model_dump(), **r} for x, r in zip(e, resultados, strict=True)]}
 
 
 @app.get("/api/curva-atenuacion", tags=["predicción"],
@@ -140,7 +140,7 @@ def curva_atenuacion(magnitud: MAGNITUD, profundidad_km: PROFUNDIDAD,
     return {"magnitud": magnitud, "profundidad_km": profundidad_km, "version_modelo": p.version,
             "puntos": [{"distancia_km": round(float(d), 1), "intensidad_ems98": r["intensidad_ems98"],
                         "intervalo_80": r["intervalo_80"], "romano": r["romano"], "nivel_danio": r["nivel_danio"],
-                        "fuera_de_rango": r["fuera_de_rango"]} for d, r in zip(distancias, resultados)]}
+                        "fuera_de_rango": r["fuera_de_rango"]} for d, r in zip(distancias, resultados, strict=True)]}
 
 
 @app.get("/api/ciudades", tags=["predicción"],
@@ -155,7 +155,7 @@ def ciudades(magnitud: MAGNITUD, profundidad_km: PROFUNDIDAD,
     distancias = distancia_km(latitud, longitud, lats, lons)
     resultados = p.predecir(np.full(len(CIUDADES), magnitud), np.full(len(CIUDADES), profundidad_km), distancias)
     filas = [{"ciudad": c, "region": reg, "latitud": la, "longitud": lo, "distancia_km": round(float(d), 1), **r}
-             for (c, reg, la, lo), d, r in zip(CIUDADES, distancias, resultados)]
+             for (c, reg, la, lo), d, r in zip(CIUDADES, distancias, resultados, strict=True)]
     return {"epicentro": {"latitud": latitud, "longitud": longitud, "magnitud": magnitud,
                           "profundidad_km": profundidad_km},
             "version_modelo": p.version,
