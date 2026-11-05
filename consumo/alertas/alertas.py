@@ -179,7 +179,7 @@ def notificar(m: dict, args, estado: dict) -> list[str]:
             if nombre == "correo":
                 estado["correo_caido"] = True
                 log(FUENTE, "Correo desactivado en esta ejecución: ¿está Mailpit levantado? "
-                            "(docker compose ... --profile alertas up -d)")
+                            "(docker compose --profile alertas up -d)")
     log(FUENTE, "Alerta enviada por: " + ", ".join(enviados))
     return enviados
 
@@ -267,7 +267,7 @@ def main() -> int:
     try:
         db.command("ping")
     except PyMongoError as e:
-        log(FUENTE, f"No se pudo conectar a MongoDB ({e.__class__.__name__}). ¿Está levantado? docker compose --profile mongo up -d")
+        log(FUENTE, f"No se pudo conectar a MongoDB ({e.__class__.__name__}). ¿Está levantado? docker compose --profile alertas up -d")
         return 1
 
     estado: dict = {}

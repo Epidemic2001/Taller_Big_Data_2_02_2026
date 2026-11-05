@@ -95,6 +95,54 @@ Cada fila es una fuente con su herramienta de ingesta y su almacenamiento, y el 
 
 El consumo sigue el tipo de ingesta: lo que llega por *streaming* se consume como alerta en segundos; los testimonios por *micro-batch* alimentan el dashboard; el ShakeMap por evento alimenta la API y el mapa; el modelo de ML responde bajo demanda; y el histórico por *batch* y los archivos del CSN se exploran en notebooks. Así, cada almacenamiento tiene un consumo coherente con su dato.
 
+### 🚨 Implementación del consumo 1: alertas sísmicas en tiempo real
+
+Bot en `consumo/alertas/alertas.py`: lee de **MongoDB** la colección `emsc_eventos`, que el consumidor de Kafka llena con el *streaming* de EMSC, y **avisa en segundos** cuando un sismo cumple dos reglas: **magnitud mínima** (M ≥ 4,5 por defecto) y **epicentro cerca de una ciudad vigilada** (a ≤ 300 km de una de 12 ciudades, de Arica a Punta Arenas). La alerta sale por la terminal y por correo, y también por **Slack** y **Telegram** si se configuran. Los correos llegan a **Mailpit**, una bandeja local que no envía correos reales, para demostrar el canal sin cuentas externas.
+
+```bash
+docker compose --profile kafka --profile alertas up -d   # Kafka + MongoDB + Mailpit
+python fuentes/emsc_streaming/productor_kafka.py --kafka localhost:9092 --duracion 900   # terminal 1
+python fuentes/emsc_streaming/consumidor_mongodb.py --kafka localhost:9092 --continuo     # terminal 2
+python consumo/alertas/alertas.py --continuo                                              # terminal 3: el bot
+```
+
+Bandeja de correo en <http://localhost:8025> y Mongo Express en <http://localhost:8082>. Los pasos completos de la demo están en [DEMO.md, sección 11](DEMO.md#11-consumo-alertas-sísmicas-en-tiempo-real-mongodb).
+
+| Opción | Qué hace |
+| --- | --- |
+| `--continuo` | Revisa MongoDB cada 10 segundos (`--intervalo`) hasta que se detiene con Ctrl+C. Sin ella, revisa una vez y termina |
+| `--umbral 5 --radio 200` | Cambia la magnitud mínima y el radio en km alrededor de cada ciudad |
+| `--ciudades Santiago Calama` | Vigila solo esas ciudades (por defecto, las 12) |
+| `--horas 24` | Considera solo los sismos de las últimas N horas |
+| `--probar` | Envía una alerta de prueba con el último sismo guardado |
+| `--demo` | Demo en vivo: sin filtros (M ≥ 0, todo el mundo), revisa cada 2 segundos y avisa solo los sismos que lleguen desde ese momento |
+| `--sin-correo` | Avisa solo por la terminal, Slack y Telegram |
+
+**Cómo decide:** MongoDB filtra por magnitud, por la ventana de tiempo y por un círculo `$geoWithin` / `$centerSphere` alrededor de cada ciudad, que usa el índice geoespacial `2dsphere` de `epicentro`. Como ese círculo es aproximado, el bot confirma la distancia con la fórmula de haversine. Cada alerta queda en la colección `alertas_enviadas`, así que un sismo se avisa una sola vez aunque el bot se reinicie; si EMSC corrige la magnitud en 0,5 o más, llega una **ACTUALIZACIÓN**. El mensaje trae el nivel (moderado bajo M5, fuerte desde M5 y mayor desde M6), la hora de Chile, la ciudad más cercana y las tres siguientes, la profundidad y un enlace al mapa. Un canal caído no impide los demás. Slack y Telegram se activan con variables en `consumo/alertas/.env` (la plantilla es `consumo/alertas/.env.example`).
+
+### 📈 Implementación del consumo 2: dashboard de BI en Grafana
+
+Dashboard en `consumo/dashboard/grafana/`: un **Grafana** con el plugin oficial de ClickHouse que consulta con SQL la vista `v_testimonios` del **Data Warehouse de ClickHouse**, el modelo estrella que Spark carga con los testimonios ciudadanos de LastQuake. Muestra dónde, cuándo y cómo se sienten los sismos. El datasource y el dashboard "Sismos sentidos en Chile" se cargan solos al levantar el contenedor (*provisioning*), así que no hay que configurar nada a mano.
+
+```bash
+docker compose --profile spark --profile dashboard up -d --build   # Spark + ClickHouse + Grafana
+python fuentes/emsc_lastquake/sondeo.py --desde 2026-09-01 --ciclos 1   # testimonios para los paneles
+```
+
+Dashboard en <http://localhost:3000>: se ve sin iniciar sesión, y para editarlo el usuario es admin / sismologia. Si ClickHouse ya tiene testimonios, basta con `docker compose --profile dashboard up -d`. Los pasos completos de la demo están en [DEMO.md, sección 12](DEMO.md#12-consumo-dashboard-de-bi-en-grafana-clickhouse).
+
+| Panel | Qué muestra |
+| --- | --- |
+| Indicadores | Testimonios, sismos con testimonios, intensidad promedio (EMS-98) y distancia mediana al epicentro |
+| Testimonios por macrozona | Dónde se sintieron los sismos |
+| Atenuación | Intensidad promedio en tramos de 25 km de distancia al epicentro: cae a medida que la distancia aumenta |
+| Testimonios por hora | Cada pico es un sismo: los reportes llegan en los minutos siguientes |
+| Canal de reporte | App móvil, web móvil, web o teléfono |
+| Daño estimado (EMS-98) | Testimonios por nivel de daño, según los cortes que aplica Spark al cargar |
+| Sismos con más testimonios | Región, magnitud, profundidad, intensidad promedio y máxima, y hasta qué distancia se sintió cada sismo |
+
+**Cómo se consulta:** Grafana se conecta a ClickHouse por el protocolo nativo dentro de la red de Docker (`clickhouse:9000`). Cada panel es una consulta SQL sobre `sismologia.v_testimonios` filtrada con `$__timeFilter(tiempo_utc)`, así que al cambiar el rango de tiempo (90 días por defecto) ClickHouse recalcula todos los paneles. El dashboard se refresca cada minuto, al mismo ritmo que los *micro-batches* de Spark, y como la vista usa `FINAL`, un testimonio que Spark reenvía no se cuenta dos veces. La conexión está en `provisioning/datasources/clickhouse.yml` y el dashboard en `dashboards/sismologia.json`, ambos dentro de `consumo/dashboard/grafana/`.
+
 ### 🗺️ Implementación del consumo 3: daños y rutas de emergencia en Calama
 
 Aplicación web en `consumo/api_mapa/`: una API **FastAPI** y un **mapa web en Leaflet** que leen directamente de PostgreSQL + PostGIS (y el COG de S3). Para cada sismo con ShakeMap muestra qué **daño potencial** recibió cada sector de Calama y cada instalación crítica. También calcula **rutas de emergencia** sobre la red vial de OpenStreetMap que evitan las calles de mayor intensidad, incluida la ruta al hospital operativo más cercano.
@@ -104,7 +152,7 @@ docker compose --profile lambda --profile mapa up -d --build
 python consumo/api_mapa/cargar_calama.py      # una vez: red vial y sectores de Calama (OpenStreetMap)
 ```
 
-Mapa en <http://localhost:8090> y documentación interactiva de la API en <http://localhost:8090/docs>. Los pasos completos de la demo están en [DEMO.md, sección 11](DEMO.md#11-consumo-api-rest--mapa-web-daños-y-rutas-de-emergencia-postgis--s3).
+Mapa en <http://localhost:8090> y documentación interactiva de la API en <http://localhost:8090/docs>. Los pasos completos de la demo están en [DEMO.md, sección 13](DEMO.md#13-consumo-api-rest--mapa-web-daños-y-rutas-de-emergencia-postgis--s3).
 
 | Endpoint | Qué entrega |
 | --- | --- |
@@ -129,7 +177,7 @@ docker compose --profile spark --profile ml up -d --build   # Spark + ClickHouse
 python fuentes/emsc_lastquake/sondeo.py --desde 2026-01-01 --ciclos 1   # testimonios para entrenar
 ```
 
-Simulador en <http://localhost:8091> y documentación interactiva de la API en <http://localhost:8091/docs>. Los pasos completos de la demo están en [DEMO.md, sección 12](DEMO.md#12-consumo-endpoint-de-machine-learning-clickhouse--scikit-learn).
+Simulador en <http://localhost:8091> y documentación interactiva de la API en <http://localhost:8091/docs>. Los pasos completos de la demo están en [DEMO.md, sección 14](DEMO.md#14-consumo-endpoint-de-machine-learning-clickhouse--scikit-learn).
 
 | Endpoint | Qué entrega |
 | --- | --- |
@@ -158,7 +206,7 @@ Servicio en `consumo/jupyterlab/`: un **JupyterLab** con **PyIceberg**, **DuckDB
 docker compose --profile jupyter up -d --build   # JupyterLab + MinIO y catálogo Iceberg + MinIO del data lake
 ```
 
-JupyterLab en <http://localhost:8888> (token `sismologia`). Los pasos completos de la demo están en [DEMO.md, sección 13](DEMO.md#13-consumo-notebooks-en-jupyterlab-lakehouse-iceberg--data-lake-minio).
+JupyterLab en <http://localhost:8888> (token `sismologia`). Los pasos completos de la demo están en [DEMO.md, sección 15](DEMO.md#15-consumo-notebooks-en-jupyterlab-lakehouse-iceberg--data-lake-minio).
 
 | Notebook | Lee | Qué responde |
 | --- | --- | --- |

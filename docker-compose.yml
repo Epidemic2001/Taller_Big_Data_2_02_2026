@@ -18,6 +18,10 @@
 #                                                 + PostgreSQL/PostGIS  localhost:5433
 #                                                 + pgAdmin             http://localhost:5050
 #   docker compose --profile geoespacial up -d -> solo PostGIS + pgAdmin (consultar lo guardado)
+#   docker compose --profile alertas up -d     -> consumo 1: bandeja de correo de las alertas (Mailpit)  http://localhost:8025
+#                                                 + MongoDB + Mongo Express  http://localhost:8082
+#   docker compose --profile dashboard up -d   -> consumo 2: dashboard de BI (Grafana)  http://localhost:3000
+#                                                 + ClickHouse (data warehouse)  http://localhost:8123/play
 #   docker compose --profile mapa    up -d     -> consumo 3: API REST + mapa web  http://localhost:8090
 #                                                 + PostgreSQL/PostGIS  localhost:5433
 #   docker compose --profile ml      up -d     -> consumo 4: endpoint de Machine Learning  http://localhost:8091
@@ -84,10 +88,11 @@ services:
   # ------------------------------------------------------------------ MONGODB (almacenamiento EMSC Streaming)
   # Base NoSQL donde el consumidor de Kafka guarda las alertas EMSC. Está en el perfil "kafka" para
   # levantarse junto al tópico, y en "mongo" para consultar lo guardado sin prender Kafka.
+  # También está en "alertas" y "consumo", porque el bot de alertas (consumo 1) lee de aquí.
   # Los datos viven en el volumen "mongo-datos": sobreviven a "down" y solo se borran con "down -v".
   mongodb:
     image: mongo:8.0
-    profiles: ["kafka", "mongo"]
+    profiles: ["kafka", "mongo", "alertas", "consumo"]
     container_name: sismo-mongodb
     ports:
       - "27017:27017"          # para el consumidor que corre en Windows (localhost:27017)
@@ -105,7 +110,7 @@ services:
 
   mongo-express:
     image: mongo-express:1.0.2
-    profiles: ["kafka", "mongo"]
+    profiles: ["kafka", "mongo", "alertas"]
     container_name: sismo-mongo-express
     depends_on:
       mongodb:
@@ -251,12 +256,13 @@ services:
   # ClickHouse: base OLAP columnar con el modelo estrella de los testimonios. Al arrancar ejecuta
   # herramientas/clickhouse/esquema.sql (todo IF NOT EXISTS). Está en el perfil "spark" para recibir
   # los micro-batches, y en "warehouse" para consultar sin Spark. El puerto 8123 sirve las consultas
-  # HTTP, el JDBC de Spark y un editor SQL web en /play. También está en "ml" y "consumo", porque el
-  # endpoint de Machine Learning (consumo 4) entrena con estos testimonios.
+  # HTTP, el JDBC de Spark y un editor SQL web en /play. También está en "dashboard", "ml" y "consumo",
+  # porque el dashboard de Grafana (consumo 2) y el endpoint de Machine Learning (consumo 4) leen
+  # estos testimonios.
   # Los datos viven en el volumen "clickhouse-datos": solo "down -v" los borra.
   clickhouse:
     image: clickhouse/clickhouse-server:26.8
-    profiles: ["spark", "warehouse", "ml", "consumo"]
+    profiles: ["spark", "warehouse", "dashboard", "ml", "consumo"]
     container_name: sismo-clickhouse
     ports:
       - "8123:8123"
@@ -341,6 +347,48 @@ services:
       - ./herramientas/pgadmin/servers.json:/pgadmin4/servers.json:ro
       - ./herramientas/pgadmin/pgpass:/pgadmin4/pgpass:ro
 
+  # ------------------------------------------------------------------ CONSUMO 1: ALERTAS (MongoDB)
+  # El bot consumo/alertas/alertas.py corre en Windows: lee los sismos de MongoDB y avisa por terminal,
+  # correo, Slack y Telegram. Mailpit recibe sus correos (SMTP 1025) y los muestra en una bandeja web
+  # (8025). No sale ningún correo real: sirve para demostrar el canal sin cuentas externas.
+  mailpit:
+    image: axllent/mailpit:v1.21
+    profiles: ["alertas", "consumo"]
+    container_name: sismo-mailpit
+    ports:
+      - "8025:8025"            # bandeja web
+      - "1025:1025"            # SMTP (desde Windows: localhost:1025)
+    environment:
+      MP_SMTP_AUTH_ACCEPT_ANY: "1"
+      MP_SMTP_AUTH_ALLOW_INSECURE: "1"
+
+  # ------------------------------------------------------------------ CONSUMO 2: DASHBOARD DE BI (ClickHouse)
+  # Grafana con el plugin oficial de ClickHouse (se descarga la primera vez, ~1 minuto). El datasource y
+  # el dashboard se cargan solos desde consumo/dashboard/grafana (provisioning): no hay que configurar
+  # nada a mano. Cualquiera ve el dashboard sin iniciar sesión; para editarlo: admin / sismologia.
+  # La configuración que se cambie desde la interfaz vive en el volumen "grafana-datos".
+  grafana:
+    image: grafana/grafana:11.6.0
+    profiles: ["dashboard", "consumo"]
+    container_name: sismo-grafana
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: sismologia
+      GF_INSTALL_PLUGINS: grafana-clickhouse-datasource
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_USERS_DEFAULT_THEME: light
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/sismologia.json
+    volumes:
+      - grafana-datos:/var/lib/grafana
+      - ./consumo/dashboard/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./consumo/dashboard/grafana/dashboards:/var/lib/grafana/dashboards:ro
+
   # ------------------------------------------------------------------ CONSUMO 3: API REST + MAPA WEB (PostGIS + S3)
   # FastAPI lee directo de PostGIS (y el COG de S3): daño por sector e instalación crítica de Calama,
   # isosistas y rutas de emergencia que evitan las calles de mayor intensidad. Sirve también el mapa
@@ -422,3 +470,4 @@ volumes:
   datalake-datos:
   clickhouse-datos:
   postgis-datos:
+  grafana-datos:

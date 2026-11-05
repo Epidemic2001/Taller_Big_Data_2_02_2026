@@ -384,7 +384,112 @@ volver a ejecutarlo para que el COG reaparezca en S3.
 
 ---
 
-## 11. Consumo: API REST + mapa web, daños y rutas de emergencia (PostGIS + S3)
+# Fase de consumo
+
+## 11. Consumo: alertas sísmicas en tiempo real (MongoDB)
+
+Un bot que **lee directo de MongoDB** los sismos que llegan por el streaming de EMSC (secciones 1 y 6)
+y, si uno cumple las reglas, **avisa en segundos** por la terminal, por correo y, si se configuran, por
+Slack y Telegram. Las reglas son una **magnitud mínima** y la **cercanía a una ciudad**, con el índice
+geoespacial `2dsphere`. El código está en `consumo/alertas/alertas.py`.
+
+```bash
+docker compose --profile kafka --profile alertas up -d    # Kafka + MongoDB + Mongo Express + Mailpit
+python fuentes/emsc_streaming/productor_kafka.py --kafka localhost:9092 --duracion 900   # terminal 1
+python fuentes/emsc_streaming/consumidor_mongodb.py --kafka localhost:9092 --continuo     # terminal 2
+python consumo/alertas/alertas.py --continuo                                              # terminal 3: el bot
+```
+
+Para usar lo que ya está guardado en MongoDB, sin Kafka: `docker compose --profile alertas up -d`.
+
+| Dónde | Qué guarda |
+|---|---|
+| MongoDB `emsc_eventos` | Lo que lee: un documento por sismo, con su epicentro en GeoJSON e índice `2dsphere` |
+| MongoDB `alertas_enviadas` | Cada alerta enviada: sismo, magnitud, ciudad más cercana, tipo (nueva o actualización) y canales usados |
+| Mailpit (http://localhost:8025) | Los correos de alerta. Es una bandeja local: no sale ningún correo real |
+
+**Qué mostrar:**
+1. Terminal 1: el sismo llega por WebSocket. Terminal 2: queda en MongoDB (`MongoDB <- create ...`).
+   Mongo Express (http://localhost:8082, admin / sismologia) → colección `emsc_eventos`.
+2. Terminal 3: el bot imprime el sismo y la alerta aparece en la **bandeja de Mailpit**
+   (http://localhost:8025): asunto, hora de Chile, ciudad más cercana y enlace al mapa.
+3. Reglas por defecto: M ≥ 4,5 a ≤ 300 km de una de 12 ciudades (de Arica a Punta Arenas). Se
+   ajustan por línea de comandos (`--umbral 5 --radio 200 --ciudades Santiago Calama`).
+4. **No repite alertas:** cada sismo se avisa una vez (colección `alertas_enviadas`), aunque se
+   reinicie el bot. Si EMSC corrige la magnitud en 0,5 o más, llega una **ACTUALIZACIÓN**.
+
+**Si durante la presentación no ocurre ningún sismo cerca de Chile** (es lo normal), hay tres salidas:
+
+```bash
+python consumo/alertas/alertas.py --probar                              # alerta de prueba con el último sismo guardado
+python consumo/alertas/alertas.py --demo                                # avisa cada sismo NUEVO que llegue, de todo el mundo
+python consumo/alertas/alertas.py --umbral 4 --radio 20000 --continuo   # M ≥ 4 de todo el mundo, de las últimas 24 h
+```
+
+`--demo` da por avisados los sismos que ya estaban guardados y revisa cada 2 s, así que con el
+productor corriendo la alerta aparece unos segundos después de que el sismo llega por WebSocket.
+
+**Cómo decide:** MongoDB filtra por magnitud, por las últimas 24 horas (`--horas`) y por un círculo
+`$geoWithin` / `$centerSphere` alrededor de cada ciudad, que usa el índice `2dsphere`. Como el círculo
+es aproximado, el bot confirma la distancia con la fórmula de haversine. El nivel de la alerta sale de
+la magnitud: moderado bajo M5, fuerte desde M5 y mayor desde M6. Un canal caído no impide los demás:
+si Mailpit no está levantado, el bot lo avisa y sigue con la terminal, Slack y Telegram.
+
+**Slack y Telegram (opcional):** copien `consumo/alertas/.env.example` como `consumo/alertas/.env` y
+completen el webhook de Slack o el token y el chat del bot de Telegram. El bot usa cada canal solo si
+está definido (el `.env` no se sube a git).
+
+---
+
+## 12. Consumo: dashboard de BI en Grafana (ClickHouse)
+
+Un **Grafana** que consulta con SQL el **Data Warehouse** de testimonios ciudadanos (sección 9), sin
+copiar datos: dónde, cuándo y cómo se sienten los sismos. El datasource de ClickHouse y el dashboard
+se cargan solos (*provisioning*). El código está en `consumo/dashboard/grafana/`.
+
+```bash
+docker compose --profile spark --profile dashboard up -d --build   # Spark + ClickHouse + Grafana
+docker logs -f sismo-spark                                          # esperen el "[warehouse] micro-batch N ..."
+python fuentes/emsc_lastquake/sondeo.py --desde 2026-09-01 --ciclos 1
+```
+
+Si ClickHouse ya tiene testimonios (volumen `clickhouse-datos`), basta con
+`docker compose --profile dashboard up -d`.
+
+Abran **http://localhost:3000**: el dashboard "Sismos sentidos en Chile" se abre solo y se ve sin
+iniciar sesión (para editar: admin / sismologia). La primera vez Grafana descarga el plugin de
+ClickHouse: ~1 minuto.
+
+| Dónde | Qué hay |
+|---|---|
+| `provisioning/datasources/clickhouse.yml` | La conexión a ClickHouse: protocolo nativo, `clickhouse:9000` dentro de la red de Docker, base `sismologia` |
+| `provisioning/dashboards/proveedor.yml` | Le dice a Grafana que cargue los dashboards de la carpeta `dashboards/` |
+| `dashboards/sismologia.json` | El dashboard: 10 paneles, cada uno una consulta SQL sobre `sismologia.v_testimonios` |
+
+**Qué mostrar:**
+1. Los 4 indicadores: testimonios, sismos con testimonios, intensidad promedio (EMS-98) y distancia mediana.
+2. **Testimonios por macrozona** y **canal de reporte** (app, web, teléfono): dónde y cómo reporta la gente.
+3. **Atenuación:** la intensidad promedio cae a medida que aumenta la distancia al epicentro.
+4. **Testimonios por hora:** cada pico es un sismo; los reportes llegan en los minutos siguientes.
+5. **Daño estimado** y la tabla de **sismos con más testimonios** (región, magnitud, intensidad
+   promedio y máxima, y hasta qué distancia se sintió).
+6. Con Spark corriendo, cada micro-batch (1 minuto) actualiza los paneles. El dashboard se refresca
+   solo cada minuto (o con el botón de recarga).
+7. Para mostrar que es SQL real: panel → *Edit* → se ve la consulta sobre `sismologia.v_testimonios`.
+   Cambien el rango de tiempo arriba a la derecha y los paneles se recalculan (`$__timeFilter`).
+8. Los testimonios repetidos (Spark puede reenviar un micro-batch) no se cuentan dos veces: la vista
+   usa `FINAL`.
+
+**Si los paneles salen vacíos:** revisen el rango de tiempo (por defecto 90 días) y que ClickHouse tenga
+datos: http://localhost:8123/play (admin / sismologia) → `SELECT count() FROM sismologia.v_testimonios`.
+Si da 0, borren `datos/_estado/lastquake.json` y repitan el sondeo (ver sección 9).
+
+Los cambios que se hagan al dashboard desde la interfaz quedan en el volumen `grafana-datos`; el
+dashboard original siempre se vuelve a cargar desde `sismologia.json`.
+
+---
+
+## 13. Consumo: API REST + mapa web, daños y rutas de emergencia (PostGIS + S3)
 
 Aplicación web (FastAPI + Leaflet) que **lee directo de la base geoespacial del ShakeMap**, sin copiar
 datos: qué daño potencial recibió cada sector de Calama y cada hospital, subestación o faena, y las
@@ -440,7 +545,7 @@ Para correr la API sin Docker (con PostGIS levantado): `python consumo/api_mapa/
 
 ---
 
-## 12. Consumo: endpoint de Machine Learning (ClickHouse + scikit-learn)
+## 14. Consumo: endpoint de Machine Learning (ClickHouse + scikit-learn)
 
 Un modelo de **scikit-learn** servido con **FastAPI** que **entrena directo del Data Warehouse** de
 testimonios (sección 9), sin copiar datos. Con la magnitud, la profundidad y la distancia al epicentro,
@@ -515,7 +620,7 @@ lado se carga en el otro.
 
 ---
 
-## 13. Consumo: notebooks en JupyterLab (Lakehouse Iceberg + Data Lake MinIO)
+## 15. Consumo: notebooks en JupyterLab (Lakehouse Iceberg + Data Lake MinIO)
 
 Un **JupyterLab** con PyIceberg, DuckDB y Zarr que **lee directo del Lakehouse** del catálogo USGS
 (sección 7) **y del Data Lake** del CSN (sección 8), sin copiar datos: consultas ad-hoc e informes
@@ -532,7 +637,7 @@ catálogo Iceberg, con lo que ya tengan guardado en sus volúmenes. Cada noteboo
 |---|---|---|
 | `01_sismicidad_catalogo_usgs` | Las tablas Iceberg de la sección 7 | El DAG de Airflow, o con los meses ya extraídos: `python fuentes/usgs_catalogo/lakehouse.py --inicio 2026-01 --fin 2026-10` |
 | `02_senales_csn_datalake` | Tensores curados en el data lake (sección 8) | NiFi y `python fuentes/csn_chile/datalake.py`, o una ventana pasada con `cargar_ventana.py` (abajo) |
-| `03_reentrenamiento_modelo_ml` | Una versión del modelo en `datos/modelos/` (sección 12) | `python consumo/api_ml/entrenar.py`. La API (`--profile ml`) es opcional: si está levantada, suma su monitoreo |
+| `03_reentrenamiento_modelo_ml` | Una versión del modelo en `datos/modelos/` (sección 14) | `python consumo/api_ml/entrenar.py`. La API (`--profile ml`) es opcional: si está levantada, suma su monitoreo |
 
 **Un sismo en el data lake.** NiFi solo trae los últimos minutos de señal, así que en una demo lo
 normal es que no haya un sismo. `cargar_ventana.py` hace la misma petición que NiFi para una ventana
@@ -570,7 +675,7 @@ python fuentes/csn_chile/datalake.py                     # cura la ventana: cabe
 7. **Notebook 03, ¿cuándo conviene reentrenar?** Qué snapshot del catálogo estaba vigente al entrenar
    cada versión del modelo (`snapshot_as_of_timestamp`), los sismos que llegaron después frente al
    dominio del modelo, qué parte de la sismicidad cubre y la decisión que junta el catálogo con el
-   monitoreo de la API (sección 12, punto 6).
+   monitoreo de la API (sección 14, punto 6).
 
 Para dejar los tres notebooks ejecutados de una vez (por ejemplo antes de presentar):
 
