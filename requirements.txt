@@ -10,6 +10,7 @@ rasterio>=1.3       # GDAL desde Python (grillas raster del ShakeMap)
 kafka-python>=2.0.3 # productor/consumidor contra el broker Kafka
 pymongo>=4.10       # almacenamiento de las alertas EMSC en MongoDB
 pyiceberg[pyarrow,pyiceberg-core]>=0.10  # Data Lakehouse: tablas Apache Iceberg del catálogo USGS
+tzdata              # zonas horarias en Windows (hora de Chile en las alertas)
 zarr>=3             # Data Lake CSN: tensores de trazas para Deep Learning
 obstore>=0.6        # Data Lake CSN: lectura y escritura en MinIO (S3)
 psycopg[binary]>=3.1  # base geoespacial ShakeMap: PostgreSQL + PostGIS
@@ -28,6 +29,3 @@ joblib>=1.4
 jupyterlab>=4.4
 duckdb>=1.4,<2      # SQL sobre las tablas Iceberg (Arrow) y sobre los Parquet del data lake en MinIO
 matplotlib>=3.8
-
-# Opcional: Spark fuera de Docker (en Docker ya viene incluido)
-# pyspark==3.5.3    # requiere Java 17

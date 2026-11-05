@@ -1,0 +1,17 @@
+apiVersion: 1
+
+datasources:
+  - name: ClickHouse Sismología
+    type: grafana-clickhouse-datasource
+    uid: clickhouse-sismo
+    isDefault: true
+    editable: true
+    jsonData:
+      host: clickhouse          # nombre del servicio en docker-compose.yml
+      port: 9000                # protocolo nativo, dentro de la red de Docker
+      protocol: native
+      secure: false
+      username: admin
+      defaultDatabase: sismologia
+    secureJsonData:
+      password: sismologia
